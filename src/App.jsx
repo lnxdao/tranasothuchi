@@ -7,7 +7,7 @@ import { supabase } from "./supabaseClient";
 import {
   Plus, Trash2, TrendingUp, TrendingDown, Wallet, Droplet, ListFilter,
   LayoutDashboard, Package, Download, AlertTriangle, ArrowDownCircle, ArrowUpCircle,
-  ClipboardCheck, Link2,
+  ClipboardCheck, Link2, CheckCircle2, Settings, Pencil,
 } from "lucide-react";
 
 // ---------- palette / tokens ----------
@@ -26,8 +26,8 @@ const C = {
   loss: "#B23B3B",
 };
 
-// ---------- Menu Trà Na ----------
-const REVENUE_MENU = [
+// ---------- Menu Trà Na (dữ liệu khởi tạo — có thể sửa trong app ở tab Menu) ----------
+const DEFAULT_MENU = [
   { name: "Trà Dâu", price: 25000 },
   { name: "Trà Dâu Tằm", price: 25000 },
   { name: "Trà Mãng Cầu", price: 25000 },
@@ -40,8 +40,8 @@ const REVENUE_MENU = [
   { name: "Trà Đào", price: 20000 },
   { name: "Trà Dưa Lưới", price: 25000 },
   { name: "Bánh Tráng Tự Trộn", price: 25000 },
-  { name: "Khác", price: null },
 ];
+const MENU_KHAC = { name: "Khác", price: null };
 const EXPENSE_CATEGORIES = [
   "Nguyên liệu", "Bao bì (ly, ống hút)", "Mặt bằng", "Nhân công",
   "Điện nước", "Giao hàng", "Marketing", "Khác",
@@ -208,15 +208,24 @@ export default function App() {
   const [expenses, setExpenses] = useState([]);
   const [ingredients, setIngredients] = useState([]);
   const [stockMovements, setStockMovements] = useState([]);
+  const [menuItems, setMenuItems] = useState([]);
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState("dashboard");
   const [addType, setAddType] = useState("thu");
   const [historyFilter, setHistoryFilter] = useState("today");
   const [historyType, setHistoryType] = useState("all");
   const [saveError, setSaveError] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2600);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   useEffect(() => {
     (async () => {
+      let parsed = null;
       try {
         const { data, error } = await supabase
           .from("tra_na_data")
@@ -224,19 +233,20 @@ export default function App() {
           .eq("id", STORAGE_KEY)
           .maybeSingle();
         if (error) throw error;
-        if (data && data.payload) {
-          const parsed = data.payload;
-          setRevenues(parsed.revenues || []);
-          setExpenses(parsed.expenses || []);
-          setIngredients(parsed.ingredients || []);
-          setStockMovements(parsed.stockMovements || []);
-        }
+        if (data && data.payload) parsed = data.payload;
       } catch (e) {
         // chưa có dữ liệu — bắt đầu mới
         console.error(e);
-      } finally {
-        setReady(true);
       }
+      if (parsed) {
+        setRevenues(parsed.revenues || []);
+        setExpenses(parsed.expenses || []);
+        setIngredients(parsed.ingredients || []);
+        setStockMovements(parsed.stockMovements || []);
+      }
+      const storedMenu = parsed && parsed.menuItems;
+      setMenuItems(storedMenu && storedMenu.length ? storedMenu : DEFAULT_MENU.map((m) => ({ id: uid(), ...m })));
+      setReady(true);
     })();
   }, []);
 
@@ -266,37 +276,41 @@ export default function App() {
     const nextMovements = autoMovs.length ? [...autoMovs, ...stockMovements] : stockMovements;
     setRevenues(nextRevenues);
     setStockMovements(nextMovements);
-    persist({ revenues: nextRevenues, expenses, ingredients, stockMovements: nextMovements });
+    persist({ revenues: nextRevenues, expenses, ingredients, stockMovements: nextMovements, menuItems });
+    setTab("dashboard");
+    setToast(`Đã lưu doanh thu: ${entry.itemName} · ${fmtVND(entry.total)}`);
   };
   const addExpense = (entry) => {
     const next = [{ id: uid(), ...entry }, ...expenses];
     setExpenses(next);
-    persist({ revenues, expenses: next, ingredients, stockMovements });
+    persist({ revenues, expenses: next, ingredients, stockMovements, menuItems });
+    setTab("dashboard");
+    setToast(`Đã lưu chi phí: ${entry.category} · ${fmtVND(entry.amount)}`);
   };
   const deleteRevenue = (id) => {
     const nextRevenues = revenues.filter((r) => r.id !== id);
     const nextMovements = stockMovements.filter((m) => m.sourceRevenueId !== id);
     setRevenues(nextRevenues);
     setStockMovements(nextMovements);
-    persist({ revenues: nextRevenues, expenses, ingredients, stockMovements: nextMovements });
+    persist({ revenues: nextRevenues, expenses, ingredients, stockMovements: nextMovements, menuItems });
   };
   const deleteExpense = (id) => {
     const next = expenses.filter((e) => e.id !== id);
     setExpenses(next);
-    persist({ revenues, expenses: next, ingredients, stockMovements });
+    persist({ revenues, expenses: next, ingredients, stockMovements, menuItems });
   };
 
   const addIngredient = (ing) => {
     const next = [{ id: uid(), ...ing }, ...ingredients];
     setIngredients(next);
-    persist({ revenues, expenses, ingredients: next, stockMovements });
+    persist({ revenues, expenses, ingredients: next, stockMovements, menuItems });
   };
   const deleteIngredient = (id) => {
     const nextIng = ingredients.filter((i) => i.id !== id);
     const nextMov = stockMovements.filter((m) => m.ingredientId !== id);
     setIngredients(nextIng);
     setStockMovements(nextMov);
-    persist({ revenues, expenses, ingredients: nextIng, stockMovements: nextMov });
+    persist({ revenues, expenses, ingredients: nextIng, stockMovements: nextMov, menuItems });
   };
   const addMovement = (mov, expenseToAdd) => {
     const nextMov = [{ id: uid(), ...mov }, ...stockMovements];
@@ -306,12 +320,28 @@ export default function App() {
       nextExp = [{ id: uid(), ...expenseToAdd }, ...expenses];
       setExpenses(nextExp);
     }
-    persist({ revenues, expenses: nextExp, ingredients, stockMovements: nextMov });
+    persist({ revenues, expenses: nextExp, ingredients, stockMovements: nextMov, menuItems });
   };
   const deleteMovement = (id) => {
     const next = stockMovements.filter((m) => m.id !== id);
     setStockMovements(next);
-    persist({ revenues, expenses, ingredients, stockMovements: next });
+    persist({ revenues, expenses, ingredients, stockMovements: next, menuItems });
+  };
+
+  const addMenuItem = (item) => {
+    const next = [...menuItems, { id: uid(), ...item }];
+    setMenuItems(next);
+    persist({ revenues, expenses, ingredients, stockMovements, menuItems: next });
+  };
+  const updateMenuItem = (id, patch) => {
+    const next = menuItems.map((m) => (m.id === id ? { ...m, ...patch } : m));
+    setMenuItems(next);
+    persist({ revenues, expenses, ingredients, stockMovements, menuItems: next });
+  };
+  const deleteMenuItem = (id) => {
+    const next = menuItems.filter((m) => m.id !== id);
+    setMenuItems(next);
+    persist({ revenues, expenses, ingredients, stockMovements, menuItems: next });
   };
 
   const today = todayISO();
@@ -388,17 +418,30 @@ export default function App() {
               TIỆM TRÀ TRÁI CÂY TRÀ NA
             </span>
           </div>
-          <button
-            onClick={() => exportExcel(revenues, expenses, ingredients, stockMovements)}
-            title="Xuất Excel"
-            style={{
-              display: "flex", alignItems: "center", gap: 5, background: "rgba(255,255,255,0.14)",
-              border: "none", borderRadius: 10, padding: "7px 10px", cursor: "pointer", color: "#fff",
-            }}
-          >
-            <Download size={14} />
-            <span style={{ fontSize: 11.5, fontWeight: 500 }}>Excel</span>
-          </button>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              onClick={() => setTab("menu")}
+              title="Sửa menu & giá"
+              style={{
+                display: "flex", alignItems: "center", gap: 5, background: "rgba(255,255,255,0.14)",
+                border: "none", borderRadius: 10, padding: "7px 10px", cursor: "pointer", color: "#fff",
+              }}
+            >
+              <Settings size={14} />
+              <span style={{ fontSize: 11.5, fontWeight: 500 }}>Menu</span>
+            </button>
+            <button
+              onClick={() => exportExcel(revenues, expenses, ingredients, stockMovements)}
+              title="Xuất Excel"
+              style={{
+                display: "flex", alignItems: "center", gap: 5, background: "rgba(255,255,255,0.14)",
+                border: "none", borderRadius: 10, padding: "7px 10px", cursor: "pointer", color: "#fff",
+              }}
+            >
+              <Download size={14} />
+              <span style={{ fontSize: 11.5, fontWeight: 500 }}>Excel</span>
+            </button>
+          </div>
         </div>
         <div style={{ color: "#C9DCD3", fontSize: 12.5, marginTop: 2 }}>
           {new Date().toLocaleDateString("vi-VN", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" })}
@@ -406,6 +449,17 @@ export default function App() {
       </div>
 
       <div style={{ padding: "0 16px", marginTop: -18, paddingBottom: 90 }}>
+        {toast && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8, background: C.primary, color: "#fff",
+            borderRadius: 12, padding: "11px 14px", marginBottom: 12, fontSize: 12.5, fontWeight: 500,
+            animation: "riseIn 0.25s ease",
+          }}>
+            <CheckCircle2 size={16} />
+            {toast}
+          </div>
+        )}
+
         {tab === "dashboard" && (
           <div style={{ animation: "riseIn 0.4s ease" }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
@@ -513,7 +567,7 @@ export default function App() {
         )}
 
         {tab === "add" && (
-          <AddForm addType={addType} setAddType={setAddType} onAddRevenue={addRevenue} onAddExpense={addExpense} />
+          <AddForm addType={addType} setAddType={setAddType} onAddRevenue={addRevenue} onAddExpense={addExpense} menu={menuItems} />
         )}
 
         {tab === "inventory" && (
@@ -521,6 +575,14 @@ export default function App() {
             ingredients={ingredients} stockMovements={stockMovements} thisMonth={thisMonth}
             onAddIngredient={addIngredient} onDeleteIngredient={deleteIngredient}
             onAddMovement={addMovement} onDeleteMovement={deleteMovement}
+            menu={menuItems}
+          />
+        )}
+
+        {tab === "menu" && (
+          <MenuManager
+            menuItems={menuItems} onAdd={addMenuItem} onUpdate={updateMenuItem} onDelete={deleteMenuItem}
+            onBack={() => setTab("dashboard")}
           />
         )}
 
@@ -573,13 +635,14 @@ function NavBtn({ icon: Icon, label, active, onClick, accent, badge }) {
   );
 }
 
-function AddForm({ addType, setAddType, onAddRevenue, onAddExpense }) {
+function AddForm({ addType, setAddType, onAddRevenue, onAddExpense, menu }) {
+  const menuOptions = [...menu, MENU_KHAC];
   const [date, setDate] = useState(todayISO());
-  const [item, setItem] = useState(REVENUE_MENU[0].name);
+  const [item, setItem] = useState(menuOptions[0].name);
   const [customItem, setCustomItem] = useState("");
   const [qty, setQty] = useState(1);
-  const [basePrice, setBasePrice] = useState(REVENUE_MENU[0].price);
-  const [price, setPrice] = useState(REVENUE_MENU[0].price);
+  const [basePrice, setBasePrice] = useState(menuOptions[0].price ?? "");
+  const [price, setPrice] = useState(menuOptions[0].price ?? "");
   const [note, setNote] = useState("");
   const [channel, setChannel] = useState(CHANNELS[0].key);
   const [feePercent, setFeePercent] = useState(CHANNELS[0].defaultFee);
@@ -657,7 +720,7 @@ function AddForm({ addType, setAddType, onAddRevenue, onAddExpense }) {
               <select value={item} onChange={(e) => {
                 const name = e.target.value;
                 setItem(name);
-                const preset = REVENUE_MENU.find((m) => m.name === name);
+                const preset = menuOptions.find((m) => m.name === name);
                 if (preset && preset.price != null) {
                   setBasePrice(preset.price);
                   recomputePrice(preset.price, markupAmount, isPromo, promoAmount);
@@ -666,7 +729,7 @@ function AddForm({ addType, setAddType, onAddRevenue, onAddExpense }) {
                   setPrice("");
                 }
               }} style={inputStyle}>
-                {REVENUE_MENU.map((m) => <option key={m.name} value={m.name}>{m.name}{m.price ? ` — ${fmtVND(m.price)} (giá quầy)` : ""}</option>)}
+                {menuOptions.map((m) => <option key={m.id || m.name} value={m.name}>{m.name}{m.price ? ` — ${fmtVND(m.price)} (giá quầy)` : ""}</option>)}
               </select>
             </Field>
             {item === "Khác" && (
@@ -789,7 +852,7 @@ function AddForm({ addType, setAddType, onAddRevenue, onAddExpense }) {
   );
 }
 
-function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient, onDeleteIngredient, onAddMovement, onDeleteMovement }) {
+function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient, onDeleteIngredient, onAddMovement, onDeleteMovement, menu }) {
   const [view, setView] = useState("list"); // list | newIngredient | movement
   const [movType, setMovType] = useState("in"); // in | out | check
 
@@ -889,7 +952,7 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
             <Field label="Món liên quan">
               <select value={linkedItem} onChange={(e) => setLinkedItem(e.target.value)} style={inputStyle}>
                 <option value="">Không liên kết</option>
-                {REVENUE_MENU.filter((m) => m.name !== "Khác").map((m) => <option key={m.name} value={m.name}>{m.name}</option>)}
+                {menu.map((m) => <option key={m.id || m.name} value={m.name}>{m.name}</option>)}
               </select>
             </Field>
             {linkedItem && (
@@ -1113,6 +1176,84 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
               );
             })}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuManager({ menuItems, onAdd, onUpdate, onDelete, onBack }) {
+  const [name, setName] = useState("");
+  const [price, setPrice] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState("");
+  const [editPrice, setEditPrice] = useState("");
+
+  const canAdd = name.trim() && Number(price) > 0;
+  const submitAdd = () => {
+    if (!canAdd) return;
+    onAdd({ name: name.trim(), price: Number(price) });
+    setName(""); setPrice("");
+  };
+
+  const startEdit = (m) => { setEditingId(m.id); setEditName(m.name); setEditPrice(m.price); };
+  const canSaveEdit = editName.trim() && Number(editPrice) > 0;
+  const saveEdit = () => {
+    if (!canSaveEdit) return;
+    onUpdate(editingId, { name: editName.trim(), price: Number(editPrice) });
+    setEditingId(null);
+  };
+
+  return (
+    <div style={{ animation: "riseIn 0.3s ease" }}>
+      <BackHeader title="Menu & bảng giá" onBack={onBack} />
+      <div style={{ fontSize: 11, color: C.inkSoft, background: C.cream, border: `1px dashed ${C.line}`, borderRadius: 10, padding: "8px 12px", marginBottom: 12 }}>
+        Sửa tên món hoặc giá ở đây sẽ áp dụng cho các lần nhập doanh thu tiếp theo — không đổi lại các đơn đã lưu trước đó.
+      </div>
+
+      <div style={{ background: C.card, borderRadius: 16, padding: 16, border: `1px solid ${C.line}`, marginBottom: 14 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, marginBottom: 10 }}>Thêm món mới</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Tên món" style={{ ...inputStyle, flex: 1.4 }} />
+          <input type="number" min="0" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Giá (đ)" style={{ ...inputStyle, flex: 1 }} />
+        </div>
+        <SubmitBtn disabled={!canAdd} onClick={submitAdd} color={C.primary} label="Thêm vào menu" />
+      </div>
+
+      {menuItems.length === 0 ? (
+        <EmptyHint text="Menu đang trống — thêm món đầu tiên ở trên." />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {menuItems.map((m) => (
+            <div key={m.id} style={{ background: C.card, borderRadius: 12, padding: "10px 12px", border: `1px solid ${C.line}` }}>
+              {editingId === m.id ? (
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input value={editName} onChange={(e) => setEditName(e.target.value)} style={{ ...inputStyle, flex: 1.4 }} />
+                  <input type="number" min="0" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+                  <button onClick={saveEdit} disabled={!canSaveEdit} style={{
+                    border: "none", background: canSaveEdit ? C.primary : C.line, color: "#fff", borderRadius: 8,
+                    padding: "9px 12px", fontSize: 12, fontWeight: 600, cursor: canSaveEdit ? "pointer" : "not-allowed", flexShrink: 0,
+                  }}>Lưu</button>
+                </div>
+              ) : (
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
+                    <div className="ff-mono" style={{ fontSize: 12, color: C.inkSoft }}>{fmtVND(m.price)}</div>
+                  </div>
+                  <button onClick={() => startEdit(m)} style={{
+                    display: "flex", alignItems: "center", gap: 4, border: `1px solid ${C.line}`, background: "#fff",
+                    borderRadius: 8, padding: "6px 10px", fontSize: 11.5, color: C.ink, cursor: "pointer", flexShrink: 0,
+                  }}>
+                    <Pencil size={12} /> Sửa
+                  </button>
+                  <button onClick={() => onDelete(m.id)} style={{ border: "none", background: "transparent", cursor: "pointer", padding: 4, flexShrink: 0 }}>
+                    <Trash2 size={15} color={C.inkSoft} />
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>
