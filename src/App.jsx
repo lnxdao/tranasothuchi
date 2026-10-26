@@ -7,7 +7,7 @@ import { supabase } from "./supabaseClient";
 import {
   Plus, Trash2, TrendingUp, TrendingDown, Wallet, Droplet, ListFilter,
   LayoutDashboard, Package, Download, AlertTriangle, ArrowDownCircle, ArrowUpCircle,
-  ClipboardCheck, Link2, CheckCircle2, Settings, Pencil,
+  ClipboardCheck, Link2, CheckCircle2, Settings, Pencil, BarChart3, Banknote, Landmark,
 } from "lucide-react";
 
 // ---------- palette / tokens ----------
@@ -235,7 +235,6 @@ export default function App() {
         if (error) throw error;
         if (data && data.payload) parsed = data.payload;
       } catch (e) {
-        // chưa có dữ liệu — bắt đầu mới
         console.error(e);
       }
       if (parsed) {
@@ -608,7 +607,7 @@ export default function App() {
         <NavBtn icon={LayoutDashboard} label="Tổng quan" active={tab === "dashboard"} onClick={() => setTab("dashboard")} />
         <NavBtn icon={Plus} label="Nhập liệu" active={tab === "add"} onClick={() => setTab("add")} accent />
         <NavBtn icon={Package} label="Kho" active={tab === "inventory"} onClick={() => setTab("inventory")} badge={lowStockCount > 0 ? lowStockCount : null} />
-        <NavBtn icon={ListFilter} label="Lịch sử" active={tab === "history"} onClick={() => setTab("history")} />
+        <NavBtn icon={BarChart3} label="Thống kê" active={tab === "history"} onClick={() => setTab("history")} />
       </div>
     </div>
   );
@@ -1305,6 +1304,12 @@ function HistoryList({ entries, filter, setFilter, type, setType, onDeleteRevenu
   const totalIn = entries.filter((e) => e.kind === "thu").reduce((s, e) => s + Number(e.total), 0);
   const totalOut = entries.filter((e) => e.kind === "chi").reduce((s, e) => s + Number(e.total), 0);
 
+  const revenueEntries = entries.filter((e) => e.kind === "thu");
+  const cashTotal = revenueEntries.filter((e) => e.paymentMethod === "Tiền mặt").reduce((s, e) => s + Number(e.total), 0);
+  const transferTotal = revenueEntries.filter((e) => e.paymentMethod === "Chuyển khoản").reduce((s, e) => s + Number(e.total), 0);
+  const cashCount = revenueEntries.filter((e) => e.paymentMethod === "Tiền mặt").length;
+  const transferCount = revenueEntries.filter((e) => e.paymentMethod === "Chuyển khoản").length;
+
   const filters = [["today", "Hôm nay"], ["week", "7 ngày"], ["month", "Tháng này"], ["all", "Tất cả"]];
   const types = [["all", "Tất cả"], ["thu", "Thu"], ["chi", "Chi"]];
 
@@ -1322,6 +1327,25 @@ function HistoryList({ entries, filter, setFilter, type, setType, onDeleteRevenu
         <span style={{ color: C.berry, fontWeight: 600 }}>Chi: {fmtVND(totalOut)}</span>
         <span style={{ color: C.ink, fontWeight: 700 }}>Ròng: {fmtVND(totalIn - totalOut)}</span>
       </div>
+
+      {revenueEntries.length > 0 && (
+        <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+          <div style={{ flex: 1, background: C.card, borderRadius: 12, padding: "10px 12px", border: `1px solid ${C.line}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
+              <Banknote size={14} color={C.primary} />
+              <span style={{ fontSize: 11, color: C.inkSoft, fontWeight: 500 }}>Tiền mặt · {cashCount} đơn</span>
+            </div>
+            <div className="ff-mono" style={{ fontSize: 15, fontWeight: 700, color: C.primary }}>{fmtVND(cashTotal)}</div>
+          </div>
+          <div style={{ flex: 1, background: C.card, borderRadius: 12, padding: "10px 12px", border: `1px solid ${C.line}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
+              <Landmark size={14} color={C.mango} />
+              <span style={{ fontSize: 11, color: C.inkSoft, fontWeight: 500 }}>Chuyển khoản · {transferCount} đơn</span>
+            </div>
+            <div className="ff-mono" style={{ fontSize: 15, fontWeight: 700, color: C.mango }}>{fmtVND(transferTotal)}</div>
+          </div>
+        </div>
+      )}
 
       {entries.length === 0 ? (
         <div style={{ textAlign: "center", color: C.inkSoft, fontSize: 13, padding: "30px 0" }}>Chưa có giao dịch nào trong khoảng này.</div>
