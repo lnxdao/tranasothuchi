@@ -181,7 +181,7 @@ function exportExcel(revenues, expenses, ingredients, stockMovements) {
     const outSum = stockMovements.filter((m) => m.ingredientId === ing.id && m.type === "out").reduce((s, m) => s + Number(m.quantity), 0);
     const totalLoss = lossOf(ing, stockMovements, null);
     return {
-      "Nguyên liệu": ing.name, "Đơn vị": ing.unit, "Món liên quan": ing.linkedItem || "",
+      "Nguyên liệu": ing.name, "Đơn vị": ing.unit, "Món liên quan": ing.shared ? "Dùng chung tất cả món" : (ing.linkedItem || ""),
       "Định mức (ly/đơn vị)": ing.yieldPerUnit || "", "Tồn ban đầu": ing.initialStock,
       "Tổng nhập": inSum, "Tổng xuất": outSum, "Tồn hiện tại": Number(ing.initialStock) + inSum - outSum,
       "Ngưỡng cảnh báo": ing.lowStockThreshold, "Hao hụt luỹ kế": totalLoss,
@@ -265,7 +265,7 @@ export default function App() {
     const revId = uid();
     const nextRevenues = [{ id: revId, ...entry }, ...revenues];
     const autoMovs = ingredients
-      .filter((ing) => ing.linkedItem && ing.linkedItem === entry.itemName && Number(ing.yieldPerUnit) > 0)
+      .filter((ing) => Number(ing.yieldPerUnit) > 0 && (ing.shared || (ing.linkedItem && ing.linkedItem === entry.itemName)))
       .map((ing) => ({
         id: uid(), ingredientId: ing.id, date: entry.date, type: "out",
         quantity: entry.quantity / Number(ing.yieldPerUnit), unitCost: 0,
@@ -861,6 +861,7 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
   const [threshold, setThreshold] = useState("");
   const [linkedItem, setLinkedItem] = useState("");
   const [yieldPerUnit, setYieldPerUnit] = useState("");
+  const [shared, setShared] = useState(false);
 
   const [movIngredientId, setMovIngredientId] = useState(ingredients[0]?.id || "");
   const [movDate, setMovDate] = useState(todayISO());
@@ -880,9 +881,10 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
     onAddIngredient({
       name: name.trim(), unit, initialStock: Number(initialStock) || 0,
       lowStockThreshold: Number(threshold) || 0,
-      linkedItem: linkedItem || "", yieldPerUnit: Number(yieldPerUnit) || 0,
+      linkedItem: shared ? "" : (linkedItem || ""), yieldPerUnit: Number(yieldPerUnit) || 0,
+      shared,
     });
-    setName(""); setInitialStock(""); setThreshold(""); setLinkedItem(""); setYieldPerUnit("");
+    setName(""); setInitialStock(""); setThreshold(""); setLinkedItem(""); setYieldPerUnit(""); setShared(false);
     setView("list");
   };
 
@@ -948,16 +950,37 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
             <div style={{ fontSize: 11.5, color: C.inkSoft, marginBottom: 8, display: "flex", alignItems: "center", gap: 5 }}>
               <Link2 size={13} /> Liên kết món (để tự trừ kho khi bán) — tuỳ chọn
             </div>
-            <Field label="Món liên quan">
-              <select value={linkedItem} onChange={(e) => setLinkedItem(e.target.value)} style={inputStyle}>
-                <option value="">Không liên kết</option>
-                {menu.map((m) => <option key={m.id || m.name} value={m.name}>{m.name}</option>)}
-              </select>
-            </Field>
-            {linkedItem && (
-              <Field label={`1 ${unit} pha được bao nhiêu ly ${linkedItem}?`} style={{ marginBottom: 0 }}>
+
+            <label style={{
+              display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: C.ink,
+              background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: "9px 11px",
+              marginBottom: 10, cursor: "pointer",
+            }}>
+              <input type="checkbox" checked={shared} onChange={(e) => { setShared(e.target.checked); if (e.target.checked) setLinkedItem(""); }} />
+              Dùng chung cho tất cả các món (VD: trà nền, đường, đá...)
+            </label>
+
+            {!shared && (
+              <Field label="Món liên quan">
+                <select value={linkedItem} onChange={(e) => setLinkedItem(e.target.value)} style={inputStyle}>
+                  <option value="">Không liên kết</option>
+                  {menu.map((m) => <option key={m.id || m.name} value={m.name}>{m.name}</option>)}
+                </select>
+              </Field>
+            )}
+
+            {(shared || linkedItem) && (
+              <Field
+                label={shared ? `1 ${unit} pha được bao nhiêu ly (bất kỳ món nào)?` : `1 ${unit} pha được bao nhiêu ly ${linkedItem}?`}
+                style={{ marginBottom: 0 }}
+              >
                 <input type="number" min="0" value={yieldPerUnit} onChange={(e) => setYieldPerUnit(e.target.value)} placeholder="VD: 20" style={inputStyle} />
               </Field>
+            )}
+            {shared && (
+              <div style={{ fontSize: 10.5, color: C.inkSoft, marginTop: 6 }}>
+                Mỗi ly bán ra của bất kỳ món nào cũng sẽ trừ kho nguyên liệu này theo định mức trên.
+              </div>
             )}
           </div>
           <div style={{ marginBottom: 12 }} />
@@ -1005,7 +1028,7 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
           {ing && (
             <div style={{ fontSize: 11, color: C.inkSoft, marginTop: -8, marginBottom: 12 }}>
               Tồn lý thuyết hiện tại: <b>{fmtNum(theoreticalStock)} {ing.unit}</b>
-              {ing.yieldPerUnit > 0 && ` (~${cupsLeft(ing, stockMovements)} ly ${ing.linkedItem})`}
+              {ing.yieldPerUnit > 0 && ` (~${cupsLeft(ing, stockMovements)} ly ${ing.shared ? "— dùng chung" : ing.linkedItem})`}
             </div>
           )}
           <Field label="Ngày">
@@ -1120,7 +1143,9 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
                       {low && <AlertTriangle size={13} color={C.warn} />}
                     </div>
                     <div style={{ fontSize: 11, color: C.inkSoft }}>
-                      {ing2.linkedItem
+                      {ing2.shared
+                        ? `1 ${ing2.unit} = ${fmtNum(ing2.yieldPerUnit)} ly (dùng chung mọi món)${cups !== null ? ` · còn pha ~${cups} ly` : ""}`
+                        : ing2.linkedItem
                         ? `1 ${ing2.unit} = ${fmtNum(ing2.yieldPerUnit)} ly ${ing2.linkedItem}${cups !== null ? ` · còn pha ~${cups} ly` : ""}`
                         : `Ngưỡng cảnh báo: ${fmtNum(ing2.lowStockThreshold)} ${ing2.unit}`}
                     </div>
