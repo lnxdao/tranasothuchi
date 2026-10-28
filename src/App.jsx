@@ -83,19 +83,59 @@ function loadFonts() {
 }
 
 // ---------- stock helpers ----------
+// recipeLinks: [{ itemName, yieldPerUnit }] — mỗi món liên kết có định mức pha chế riêng,
+// vì cùng 1 nguyên liệu có thể hao hụt khác nhau giữa các món (VD: Mãng Cầu dùng nhiều hơn ở
+// Trà Mãng Cầu nguyên chất so với Trà Mãng Cầu Mix Dâu Tằm).
 function linkedItemsOf(ing) {
+  if (Array.isArray(ing.recipeLinks)) return ing.recipeLinks.map((r) => r.itemName);
   if (Array.isArray(ing.linkedItems)) return ing.linkedItems;
   if (ing.linkedItem) return [ing.linkedItem];
   return [];
+}
+function yieldForItem(ing, itemName) {
+  if (ing.shared) return Number(ing.yieldPerUnit) || 0;
+  if (Array.isArray(ing.recipeLinks)) {
+    const link = ing.recipeLinks.find((r) => r.itemName === itemName);
+    return link ? Number(link.yieldPerUnit) || 0 : 0;
+  }
+  // dữ liệu cũ: 1 định mức chung áp dụng cho các món đã liên kết
+  return linkedItemsOf(ing).includes(itemName) ? Number(ing.yieldPerUnit) || 0 : 0;
 }
 function stockOf(ing, stockMovements) {
   const inSum = stockMovements.filter((m) => m.ingredientId === ing.id && m.type === "in").reduce((s, m) => s + Number(m.quantity), 0);
   const outSum = stockMovements.filter((m) => m.ingredientId === ing.id && m.type === "out").reduce((s, m) => s + Number(m.quantity), 0);
   return Number(ing.initialStock || 0) + inSum - outSum;
 }
-function cupsLeft(ing, stockMovements) {
-  if (!ing.yieldPerUnit || Number(ing.yieldPerUnit) <= 0) return null;
-  return Math.floor(stockOf(ing, stockMovements) * Number(ing.yieldPerUnit));
+function cupsLeft(ing, stockMovements, itemName) {
+  const y = itemName ? yieldForItem(ing, itemName) : Number(ing.yieldPerUnit) || 0;
+  if (!y || y <= 0) return null;
+  return Math.floor(stockOf(ing, stockMovements) * y);
+}
+function recipeSummaryText(ing, stockMovements) {
+  if (ing.shared) {
+    if (!(Number(ing.yieldPerUnit) > 0)) return null;
+    const c = cupsLeft(ing, stockMovements);
+    return `1 ${ing.unit} = ${fmtNum(ing.yieldPerUnit)} ly (dùng chung mọi món)${c !== null ? ` · còn pha ~${c} ly` : ""}`;
+  }
+  const items = linkedItemsOf(ing);
+  if (items.length === 0) return null;
+  return items
+    .map((nm) => {
+      const y = yieldForItem(ing, nm);
+      if (!(y > 0)) return `${nm}: chưa đặt định mức`;
+      const c = cupsLeft(ing, stockMovements, nm);
+      return `${nm}: 1${ing.unit}=${fmtNum(y)}ly${c !== null ? ` (~${c} ly)` : ""}`;
+    })
+    .join(" · ");
+}
+function avgYield(ing) {
+  if (ing.shared) return Number(ing.yieldPerUnit) || 0;
+  if (Array.isArray(ing.recipeLinks) && ing.recipeLinks.length) {
+    const valid = ing.recipeLinks.filter((r) => Number(r.yieldPerUnit) > 0);
+    if (!valid.length) return 0;
+    return valid.reduce((s, r) => s + Number(r.yieldPerUnit), 0) / valid.length;
+  }
+  return Number(ing.yieldPerUnit) || 0;
 }
 function lossOf(ing, stockMovements, monthPrefixStr) {
   return stockMovements
@@ -187,7 +227,10 @@ function exportExcel(revenues, expenses, ingredients, stockMovements) {
     const totalLoss = lossOf(ing, stockMovements, null);
     return {
       "Nguyên liệu": ing.name, "Đơn vị": ing.unit, "Món liên quan": ing.shared ? "Dùng chung tất cả món" : linkedItemsOf(ing).join(", "),
-      "Định mức (ly/đơn vị)": ing.yieldPerUnit || "", "Tồn ban đầu": ing.initialStock,
+      "Định mức (ly/đơn vị)": ing.shared
+        ? (ing.yieldPerUnit || "")
+        : linkedItemsOf(ing).map((nm) => `${nm}: ${yieldForItem(ing, nm) || "?"}`).join("; "),
+      "Tồn ban đầu": ing.initialStock,
       "Tổng nhập": inSum, "Tổng xuất": outSum, "Tồn hiện tại": Number(ing.initialStock) + inSum - outSum,
       "Ngưỡng cảnh báo": ing.lowStockThreshold, "Hao hụt luỹ kế": totalLoss,
     };
@@ -270,10 +313,11 @@ export default function App() {
     const revId = uid();
     const nextRevenues = [{ id: revId, ...entry }, ...revenues];
     const autoMovs = ingredients
-      .filter((ing) => Number(ing.yieldPerUnit) > 0 && (ing.shared || linkedItemsOf(ing).includes(entry.itemName)))
-      .map((ing) => ({
+      .map((ing) => ({ ing, y: yieldForItem(ing, entry.itemName) }))
+      .filter(({ y }) => y > 0)
+      .map(({ ing, y }) => ({
         id: uid(), ingredientId: ing.id, date: entry.date, type: "out",
-        quantity: entry.quantity / Number(ing.yieldPerUnit), unitCost: 0,
+        quantity: entry.quantity / y, unitCost: 0,
         reason: "Bán hàng (tự động)", note: `${entry.quantity} ly ${entry.itemName}`,
         auto: true, sourceRevenueId: revId,
       }));
@@ -866,10 +910,17 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
   const [initialStock, setInitialStock] = useState("");
   const [threshold, setThreshold] = useState("");
   const [linkedItems, setLinkedItems] = useState([]);
-  const [yieldPerUnit, setYieldPerUnit] = useState("");
+  const [itemYields, setItemYields] = useState({}); // { itemName: "20" } — định mức riêng cho từng món
+  const [yieldPerUnit, setYieldPerUnit] = useState(""); // dùng khi tick "dùng chung"
   const [shared, setShared] = useState(false);
   const toggleLinkedItem = (itemName) => {
     setLinkedItems((prev) => prev.includes(itemName) ? prev.filter((n) => n !== itemName) : [...prev, itemName]);
+    setItemYields((prev) => {
+      if (prev[itemName] !== undefined) {
+        const next = { ...prev }; delete next[itemName]; return next;
+      }
+      return { ...prev, [itemName]: "" };
+    });
   };
 
   const [movIngredientId, setMovIngredientId] = useState(ingredients[0]?.id || "");
@@ -893,10 +944,11 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
     onAddIngredient({
       name: name.trim(), unit: resolvedUnit, initialStock: Number(initialStock) || 0,
       lowStockThreshold: Number(threshold) || 0,
-      linkedItems: shared ? [] : linkedItems, yieldPerUnit: Number(yieldPerUnit) || 0,
+      recipeLinks: shared ? [] : linkedItems.map((nm) => ({ itemName: nm, yieldPerUnit: Number(itemYields[nm]) || 0 })),
+      yieldPerUnit: Number(yieldPerUnit) || 0,
       shared,
     });
-    setName(""); setInitialStock(""); setThreshold(""); setLinkedItems([]); setYieldPerUnit(""); setShared(false);
+    setName(""); setInitialStock(""); setThreshold(""); setLinkedItems([]); setItemYields({}); setYieldPerUnit(""); setShared(false);
     setUnit(UNITS[0]); setCustomUnit("");
     setView("list");
   };
@@ -979,36 +1031,53 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
             </label>
 
             {!shared && (
-              <Field label={`Chọn các món dùng nguyên liệu này (có thể chọn nhiều)${linkedItems.length ? ` — đã chọn ${linkedItems.length}` : ""}`}>
+              <Field label={`Chọn các món dùng nguyên liệu này — mỗi món có định mức riêng${linkedItems.length ? ` (đã chọn ${linkedItems.length})` : ""}`}>
                 <div style={{
-                  display: "flex", flexDirection: "column", gap: 2, maxHeight: 160, overflowY: "auto",
+                  display: "flex", flexDirection: "column", gap: 4, maxHeight: 240, overflowY: "auto",
                   background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: 6,
                 }}>
-                  {menu.map((m) => (
-                    <label key={m.id || m.name} style={{
-                      display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: C.ink,
-                      padding: "6px 6px", borderRadius: 7, cursor: "pointer",
-                    }}>
-                      <input type="checkbox" checked={linkedItems.includes(m.name)} onChange={() => toggleLinkedItem(m.name)} />
-                      {m.name}
-                    </label>
-                  ))}
+                  {menu.map((m) => {
+                    const checked = linkedItems.includes(m.name);
+                    return (
+                      <div key={m.id || m.name}>
+                        <label style={{
+                          display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: C.ink,
+                          padding: "6px 6px", borderRadius: 7, cursor: "pointer",
+                        }}>
+                          <input type="checkbox" checked={checked} onChange={() => toggleLinkedItem(m.name)} />
+                          {m.name}
+                        </label>
+                        {checked && (
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 6px 6px 32px" }}>
+                            <span style={{ fontSize: 11, color: C.inkSoft, whiteSpace: "nowrap" }}>1 {unit} pha được</span>
+                            <input
+                              type="number" min="0"
+                              value={itemYields[m.name] ?? ""}
+                              onChange={(e) => setItemYields((prev) => ({ ...prev, [m.name]: e.target.value }))}
+                              placeholder="VD: 20" style={{ ...inputStyle, padding: "6px 8px", fontSize: 12.5 }}
+                            />
+                            <span style={{ fontSize: 11, color: C.inkSoft, whiteSpace: "nowrap" }}>ly {m.name}</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ fontSize: 10.5, color: C.inkSoft, marginTop: 6 }}>
+                  Mỗi món dùng nguyên liệu này có thể hao hụt khác nhau (VD: món nguyên chất dùng nhiều hơn món pha trộn), nên nhập định mức riêng cho từng món.
                 </div>
               </Field>
             )}
 
-            {(shared || linkedItems.length > 0) && (
-              <Field
-                label={shared ? `1 ${unit} pha được bao nhiêu ly (bất kỳ món nào)?` : `1 ${unit} pha được bao nhiêu ly (mỗi món đã chọn)?`}
-                style={{ marginBottom: 0 }}
-              >
-                <input type="number" min="0" value={yieldPerUnit} onChange={(e) => setYieldPerUnit(e.target.value)} placeholder="VD: 20" style={inputStyle} />
-              </Field>
-            )}
             {shared && (
-              <div style={{ fontSize: 10.5, color: C.inkSoft, marginTop: 6 }}>
-                Mỗi ly bán ra của bất kỳ món nào cũng sẽ trừ kho nguyên liệu này theo định mức trên.
-              </div>
+              <>
+                <Field label={`1 ${unit} pha được bao nhiêu ly (bất kỳ món nào)?`} style={{ marginBottom: 0 }}>
+                  <input type="number" min="0" value={yieldPerUnit} onChange={(e) => setYieldPerUnit(e.target.value)} placeholder="VD: 20" style={inputStyle} />
+                </Field>
+                <div style={{ fontSize: 10.5, color: C.inkSoft, marginTop: 6 }}>
+                  Mỗi ly bán ra của bất kỳ món nào cũng sẽ trừ kho nguyên liệu này theo định mức trên.
+                </div>
+              </>
             )}
           </div>
           <div style={{ marginBottom: 12 }} />
@@ -1056,7 +1125,7 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
           {ing && (
             <div style={{ fontSize: 11, color: C.inkSoft, marginTop: -8, marginBottom: 12 }}>
               Tồn lý thuyết hiện tại: <b>{fmtNum(theoreticalStock)} {ing.unit}</b>
-              {ing.yieldPerUnit > 0 && ` (~${cupsLeft(ing, stockMovements)} ly ${ing.shared ? "— dùng chung" : linkedItemsOf(ing).join(", ")})`}
+              {recipeSummaryText(ing, stockMovements) && <> · {recipeSummaryText(ing, stockMovements)}</>}
             </div>
           )}
           <Field label="Ngày">
@@ -1077,7 +1146,7 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
                   {Math.abs(diff) < 1e-9
                     ? "Khớp với lý thuyết — không cần điều chỉnh."
                     : diff > 0
-                      ? `Hao hụt / thất thoát: ${fmtNum(diff)} ${ing?.unit}${ing?.yieldPerUnit > 0 ? ` (~${Math.round(diff * ing.yieldPerUnit)} ly)` : ""}`
+                      ? `Hao hụt / thất thoát: ${fmtNum(diff)} ${ing?.unit}${ing && avgYield(ing) > 0 ? ` (~${Math.round(diff * avgYield(ing))} ly)` : ""}`
                       : `Phát hiện dư so với sổ sách: ${fmtNum(Math.abs(diff))} ${ing?.unit}`}
                 </div>
               )}
@@ -1157,7 +1226,6 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
           {ingredients.map((ing2) => {
             const stock = stockOf(ing2, stockMovements);
             const low = stock <= Number(ing2.lowStockThreshold || 0);
-            const cups = cupsLeft(ing2, stockMovements);
             const lossMonth = lossOf(ing2, stockMovements, thisMonth);
             return (
               <div key={ing2.id} style={{
@@ -1171,11 +1239,7 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
                       {low && <AlertTriangle size={13} color={C.warn} />}
                     </div>
                     <div style={{ fontSize: 11, color: C.inkSoft }}>
-                      {ing2.shared
-                        ? `1 ${ing2.unit} = ${fmtNum(ing2.yieldPerUnit)} ly (dùng chung mọi món)${cups !== null ? ` · còn pha ~${cups} ly` : ""}`
-                        : linkedItemsOf(ing2).length > 0
-                        ? `1 ${ing2.unit} = ${fmtNum(ing2.yieldPerUnit)} ly ${linkedItemsOf(ing2).join(", ")}${cups !== null ? ` · còn pha ~${cups} ly` : ""}`
-                        : `Ngưỡng cảnh báo: ${fmtNum(ing2.lowStockThreshold)} ${ing2.unit}`}
+                      {recipeSummaryText(ing2, stockMovements) || `Ngưỡng cảnh báo: ${fmtNum(ing2.lowStockThreshold)} ${ing2.unit}`}
                     </div>
                   </div>
                   <div style={{ textAlign: "right" }}>
@@ -1189,7 +1253,7 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
                 {lossMonth > 0 && (
                   <div style={{ marginTop: 8, fontSize: 11, color: C.loss, background: "#FBEAEA", borderRadius: 8, padding: "5px 8px", display: "flex", alignItems: "center", gap: 5 }}>
                     <AlertTriangle size={12} />
-                    Hao hụt tháng này: {fmtNum(lossMonth)} {ing2.unit}{ing2.yieldPerUnit > 0 ? ` (~${Math.round(lossMonth * ing2.yieldPerUnit)} ly)` : ""}
+                    Hao hụt tháng này: {fmtNum(lossMonth)} {ing2.unit}{avgYield(ing2) > 0 ? ` (~${Math.round(lossMonth * avgYield(ing2))} ly)` : ""}
                   </div>
                 )}
               </div>
