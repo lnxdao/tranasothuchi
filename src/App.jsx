@@ -55,7 +55,7 @@ const CHANNELS = [
   { key: "Xanh SM", defaultFee: 15, defaultMarkupAmount: 2000 },
   { key: "Khác", defaultFee: 0, defaultMarkupAmount: 0 },
 ];
-const UNITS = ["kg", "g", "lít", "ml", "gói", "chai", "hộp", "cái", "khác"];
+const UNITS = ["kg", "g", "lít", "ml", "ly", "gói", "chai", "hộp", "cái", "khác"];
 const PAYMENT_METHODS = ["Tiền mặt", "Chuyển khoản"];
 const LOSS_REASONS = ["Hao hụt / hỏng", "Kiểm kho - hao hụt"];
 
@@ -857,6 +857,7 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
 
   const [name, setName] = useState("");
   const [unit, setUnit] = useState(UNITS[0]);
+  const [customUnit, setCustomUnit] = useState("");
   const [initialStock, setInitialStock] = useState("");
   const [threshold, setThreshold] = useState("");
   const [linkedItem, setLinkedItem] = useState("");
@@ -876,15 +877,19 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
     if (!movIngredientId && ingredients.length) setMovIngredientId(ingredients[0].id);
   }, [ingredients, movIngredientId]);
 
+  const resolvedUnit = unit === "khác" ? (customUnit.trim() || "khác") : unit;
+  const canSubmitIngredient = name.trim() && (unit !== "khác" || customUnit.trim());
+
   const submitIngredient = () => {
-    if (!name.trim()) return;
+    if (!canSubmitIngredient) return;
     onAddIngredient({
-      name: name.trim(), unit, initialStock: Number(initialStock) || 0,
+      name: name.trim(), unit: resolvedUnit, initialStock: Number(initialStock) || 0,
       lowStockThreshold: Number(threshold) || 0,
       linkedItem: shared ? "" : (linkedItem || ""), yieldPerUnit: Number(yieldPerUnit) || 0,
       shared,
     });
     setName(""); setInitialStock(""); setThreshold(""); setLinkedItem(""); setYieldPerUnit(""); setShared(false);
+    setUnit(UNITS[0]); setCustomUnit("");
     setView("list");
   };
 
@@ -942,6 +947,11 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
               <input type="number" min="0" value={initialStock} onChange={(e) => setInitialStock(e.target.value)} placeholder="0" style={inputStyle} />
             </Field>
           </div>
+          {unit === "khác" && (
+            <Field label="Đơn vị cụ thể là gì?">
+              <input value={customUnit} onChange={(e) => setCustomUnit(e.target.value)} placeholder="VD: ly, phần, miếng, bó..." style={inputStyle} />
+            </Field>
+          )}
           <Field label="Ngưỡng cảnh báo sắp hết (tuỳ chọn)">
             <input type="number" min="0" value={threshold} onChange={(e) => setThreshold(e.target.value)} placeholder="VD: 2" style={inputStyle} />
           </Field>
@@ -984,7 +994,7 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
             )}
           </div>
           <div style={{ marginBottom: 12 }} />
-          <SubmitBtn disabled={!name.trim()} onClick={submitIngredient} color={C.primary} label="Thêm nguyên liệu" />
+          <SubmitBtn disabled={!canSubmitIngredient} onClick={submitIngredient} color={C.primary} label="Thêm nguyên liệu" />
         </div>
       </div>
     );
