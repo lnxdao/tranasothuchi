@@ -83,6 +83,11 @@ function loadFonts() {
 }
 
 // ---------- stock helpers ----------
+function linkedItemsOf(ing) {
+  if (Array.isArray(ing.linkedItems)) return ing.linkedItems;
+  if (ing.linkedItem) return [ing.linkedItem];
+  return [];
+}
 function stockOf(ing, stockMovements) {
   const inSum = stockMovements.filter((m) => m.ingredientId === ing.id && m.type === "in").reduce((s, m) => s + Number(m.quantity), 0);
   const outSum = stockMovements.filter((m) => m.ingredientId === ing.id && m.type === "out").reduce((s, m) => s + Number(m.quantity), 0);
@@ -181,7 +186,7 @@ function exportExcel(revenues, expenses, ingredients, stockMovements) {
     const outSum = stockMovements.filter((m) => m.ingredientId === ing.id && m.type === "out").reduce((s, m) => s + Number(m.quantity), 0);
     const totalLoss = lossOf(ing, stockMovements, null);
     return {
-      "Nguyên liệu": ing.name, "Đơn vị": ing.unit, "Món liên quan": ing.shared ? "Dùng chung tất cả món" : (ing.linkedItem || ""),
+      "Nguyên liệu": ing.name, "Đơn vị": ing.unit, "Món liên quan": ing.shared ? "Dùng chung tất cả món" : linkedItemsOf(ing).join(", "),
       "Định mức (ly/đơn vị)": ing.yieldPerUnit || "", "Tồn ban đầu": ing.initialStock,
       "Tổng nhập": inSum, "Tổng xuất": outSum, "Tồn hiện tại": Number(ing.initialStock) + inSum - outSum,
       "Ngưỡng cảnh báo": ing.lowStockThreshold, "Hao hụt luỹ kế": totalLoss,
@@ -265,7 +270,7 @@ export default function App() {
     const revId = uid();
     const nextRevenues = [{ id: revId, ...entry }, ...revenues];
     const autoMovs = ingredients
-      .filter((ing) => Number(ing.yieldPerUnit) > 0 && (ing.shared || (ing.linkedItem && ing.linkedItem === entry.itemName)))
+      .filter((ing) => Number(ing.yieldPerUnit) > 0 && (ing.shared || linkedItemsOf(ing).includes(entry.itemName)))
       .map((ing) => ({
         id: uid(), ingredientId: ing.id, date: entry.date, type: "out",
         quantity: entry.quantity / Number(ing.yieldPerUnit), unitCost: 0,
@@ -860,9 +865,12 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
   const [customUnit, setCustomUnit] = useState("");
   const [initialStock, setInitialStock] = useState("");
   const [threshold, setThreshold] = useState("");
-  const [linkedItem, setLinkedItem] = useState("");
+  const [linkedItems, setLinkedItems] = useState([]);
   const [yieldPerUnit, setYieldPerUnit] = useState("");
   const [shared, setShared] = useState(false);
+  const toggleLinkedItem = (itemName) => {
+    setLinkedItems((prev) => prev.includes(itemName) ? prev.filter((n) => n !== itemName) : [...prev, itemName]);
+  };
 
   const [movIngredientId, setMovIngredientId] = useState(ingredients[0]?.id || "");
   const [movDate, setMovDate] = useState(todayISO());
@@ -885,10 +893,10 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
     onAddIngredient({
       name: name.trim(), unit: resolvedUnit, initialStock: Number(initialStock) || 0,
       lowStockThreshold: Number(threshold) || 0,
-      linkedItem: shared ? "" : (linkedItem || ""), yieldPerUnit: Number(yieldPerUnit) || 0,
+      linkedItems: shared ? [] : linkedItems, yieldPerUnit: Number(yieldPerUnit) || 0,
       shared,
     });
-    setName(""); setInitialStock(""); setThreshold(""); setLinkedItem(""); setYieldPerUnit(""); setShared(false);
+    setName(""); setInitialStock(""); setThreshold(""); setLinkedItems([]); setYieldPerUnit(""); setShared(false);
     setUnit(UNITS[0]); setCustomUnit("");
     setView("list");
   };
@@ -966,22 +974,32 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
               background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: "9px 11px",
               marginBottom: 10, cursor: "pointer",
             }}>
-              <input type="checkbox" checked={shared} onChange={(e) => { setShared(e.target.checked); if (e.target.checked) setLinkedItem(""); }} />
+              <input type="checkbox" checked={shared} onChange={(e) => { setShared(e.target.checked); if (e.target.checked) setLinkedItems([]); }} />
               Dùng chung cho tất cả các món (VD: trà nền, đường, đá...)
             </label>
 
             {!shared && (
-              <Field label="Món liên quan">
-                <select value={linkedItem} onChange={(e) => setLinkedItem(e.target.value)} style={inputStyle}>
-                  <option value="">Không liên kết</option>
-                  {menu.map((m) => <option key={m.id || m.name} value={m.name}>{m.name}</option>)}
-                </select>
+              <Field label={`Chọn các món dùng nguyên liệu này (có thể chọn nhiều)${linkedItems.length ? ` — đã chọn ${linkedItems.length}` : ""}`}>
+                <div style={{
+                  display: "flex", flexDirection: "column", gap: 2, maxHeight: 160, overflowY: "auto",
+                  background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: 6,
+                }}>
+                  {menu.map((m) => (
+                    <label key={m.id || m.name} style={{
+                      display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: C.ink,
+                      padding: "6px 6px", borderRadius: 7, cursor: "pointer",
+                    }}>
+                      <input type="checkbox" checked={linkedItems.includes(m.name)} onChange={() => toggleLinkedItem(m.name)} />
+                      {m.name}
+                    </label>
+                  ))}
+                </div>
               </Field>
             )}
 
-            {(shared || linkedItem) && (
+            {(shared || linkedItems.length > 0) && (
               <Field
-                label={shared ? `1 ${unit} pha được bao nhiêu ly (bất kỳ món nào)?` : `1 ${unit} pha được bao nhiêu ly ${linkedItem}?`}
+                label={shared ? `1 ${unit} pha được bao nhiêu ly (bất kỳ món nào)?` : `1 ${unit} pha được bao nhiêu ly (mỗi món đã chọn)?`}
                 style={{ marginBottom: 0 }}
               >
                 <input type="number" min="0" value={yieldPerUnit} onChange={(e) => setYieldPerUnit(e.target.value)} placeholder="VD: 20" style={inputStyle} />
@@ -1038,7 +1056,7 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
           {ing && (
             <div style={{ fontSize: 11, color: C.inkSoft, marginTop: -8, marginBottom: 12 }}>
               Tồn lý thuyết hiện tại: <b>{fmtNum(theoreticalStock)} {ing.unit}</b>
-              {ing.yieldPerUnit > 0 && ` (~${cupsLeft(ing, stockMovements)} ly ${ing.shared ? "— dùng chung" : ing.linkedItem})`}
+              {ing.yieldPerUnit > 0 && ` (~${cupsLeft(ing, stockMovements)} ly ${ing.shared ? "— dùng chung" : linkedItemsOf(ing).join(", ")})`}
             </div>
           )}
           <Field label="Ngày">
@@ -1155,8 +1173,8 @@ function InventoryTab({ ingredients, stockMovements, thisMonth, onAddIngredient,
                     <div style={{ fontSize: 11, color: C.inkSoft }}>
                       {ing2.shared
                         ? `1 ${ing2.unit} = ${fmtNum(ing2.yieldPerUnit)} ly (dùng chung mọi món)${cups !== null ? ` · còn pha ~${cups} ly` : ""}`
-                        : ing2.linkedItem
-                        ? `1 ${ing2.unit} = ${fmtNum(ing2.yieldPerUnit)} ly ${ing2.linkedItem}${cups !== null ? ` · còn pha ~${cups} ly` : ""}`
+                        : linkedItemsOf(ing2).length > 0
+                        ? `1 ${ing2.unit} = ${fmtNum(ing2.yieldPerUnit)} ly ${linkedItemsOf(ing2).join(", ")}${cups !== null ? ` · còn pha ~${cups} ly` : ""}`
                         : `Ngưỡng cảnh báo: ${fmtNum(ing2.lowStockThreshold)} ${ing2.unit}`}
                     </div>
                   </div>
