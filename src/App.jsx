@@ -8,6 +8,7 @@ import {
   Plus, Trash2, TrendingUp, TrendingDown, Wallet, Droplet, ListFilter,
   LayoutDashboard, Package, Download, AlertTriangle, ArrowDownCircle, ArrowUpCircle,
   ClipboardCheck, Link2, CheckCircle2, Settings, Pencil, BarChart3, Banknote, Landmark,
+  Lock, Unlock, LogOut, X, ShoppingCart, ClipboardList,
 } from "lucide-react";
 
 // ---------- palette / tokens ----------
@@ -60,6 +61,8 @@ const PAYMENT_METHODS = ["Tiền mặt", "Chuyển khoản"];
 const LOSS_REASONS = ["Hao hụt / hỏng", "Kiểm kho - hao hụt"];
 
 const STORAGE_KEY = "quan-nuoc-so-thu-chi";
+const ADMIN_PASS = "123123";
+const ADMIN_FLAG_KEY = "tra-na-admin-unlocked";
 
 const todayISO = () => new Date().toLocaleDateString("en-CA");
 const monthPrefix = () => todayISO().slice(0, 7);
@@ -251,6 +254,10 @@ function exportExcel(revenues, expenses, ingredients, stockMovements) {
   XLSX.writeFile(wb, `so-thu-chi-quan-nuoc-${todayISO()}.xlsx`);
 }
 
+function readAdminFlag() {
+  try { return localStorage.getItem(ADMIN_FLAG_KEY) === "1"; } catch (e) { return false; }
+}
+
 export default function App() {
   const [revenues, setRevenues] = useState([]);
   const [expenses, setExpenses] = useState([]);
@@ -258,12 +265,37 @@ export default function App() {
   const [stockMovements, setStockMovements] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
   const [ready, setReady] = useState(false);
-  const [tab, setTab] = useState("dashboard");
+  const [role, setRole] = useState(() => (readAdminFlag() ? "admin" : "staff"));
+  const [tab, setTab] = useState(() => (readAdminFlag() ? "dashboard" : "add"));
   const [addType, setAddType] = useState("thu");
   const [historyFilter, setHistoryFilter] = useState("today");
   const [historyType, setHistoryType] = useState("all");
   const [saveError, setSaveError] = useState(false);
   const [toast, setToast] = useState(null);
+  const [showLogin, setShowLogin] = useState(false);
+  const [loginPass, setLoginPass] = useState("");
+  const [loginError, setLoginError] = useState("");
+
+  const RESTRICTED_TABS = ["dashboard", "inventory", "history", "menu"];
+  useEffect(() => {
+    if (role !== "admin" && RESTRICTED_TABS.includes(tab)) setTab("add");
+  }, [role, tab]);
+
+  const attemptAdminLogin = () => {
+    if (loginPass === ADMIN_PASS) {
+      try { localStorage.setItem(ADMIN_FLAG_KEY, "1"); } catch (e) {}
+      setRole("admin");
+      setShowLogin(false); setLoginPass(""); setLoginError("");
+      setTab("dashboard");
+    } else {
+      setLoginError("Sai mật khẩu, thử lại nhé.");
+    }
+  };
+  const logoutAdmin = () => {
+    try { localStorage.removeItem(ADMIN_FLAG_KEY); } catch (e) {}
+    setRole("staff");
+    setTab("add");
+  };
 
   useEffect(() => {
     if (!toast) return;
@@ -308,31 +340,43 @@ export default function App() {
     }
   };
 
-  // doanh thu bán ra sẽ tự động trừ kho nguyên liệu có liên kết + định mức pha chế
-  const addRevenue = (entry) => {
-    const revId = uid();
-    const nextRevenues = [{ id: revId, ...entry }, ...revenues];
-    const autoMovs = ingredients
-      .map((ing) => ({ ing, y: yieldForItem(ing, entry.itemName) }))
-      .filter(({ y }) => y > 0)
-      .map(({ ing, y }) => ({
-        id: uid(), ingredientId: ing.id, date: entry.date, type: "out",
-        quantity: entry.quantity / y, unitCost: 0,
-        reason: "Bán hàng (tự động)", note: `${entry.quantity} ly ${entry.itemName}`,
-        auto: true, sourceRevenueId: revId,
-      }));
+  // 1 đơn hàng = 1 khách, có thể gồm nhiều món — mỗi món được lưu thành 1 dòng doanh thu
+  // riêng (có chung orderId) để toàn bộ logic trừ kho / thống kê theo món vẫn hoạt động bình thường.
+  const addOrder = (items) => {
+    if (!items || !items.length) return;
+    const orderId = uid();
+    const newRows = [];
+    const autoMovs = [];
+    items.forEach((entry) => {
+      const revId = uid();
+      newRows.push({ id: revId, orderId, ...entry });
+      ingredients
+        .map((ing) => ({ ing, y: yieldForItem(ing, entry.itemName) }))
+        .filter(({ y }) => y > 0)
+        .forEach(({ ing, y }) => {
+          autoMovs.push({
+            id: uid(), ingredientId: ing.id, date: entry.date, type: "out",
+            quantity: entry.quantity / y, unitCost: 0,
+            reason: "Bán hàng (tự động)", note: `${entry.quantity} ly ${entry.itemName}`,
+            auto: true, sourceRevenueId: revId,
+          });
+        });
+    });
+    const nextRevenues = [...newRows, ...revenues];
     const nextMovements = autoMovs.length ? [...autoMovs, ...stockMovements] : stockMovements;
     setRevenues(nextRevenues);
     setStockMovements(nextMovements);
     persist({ revenues: nextRevenues, expenses, ingredients, stockMovements: nextMovements, menuItems });
-    setTab("dashboard");
-    setToast(`Đã lưu doanh thu: ${entry.itemName} · ${fmtVND(entry.total)}`);
+    setTab(role === "admin" ? "dashboard" : "today");
+    const orderTotal = items.reduce((s, it) => s + Number(it.total), 0);
+    const label = items.length === 1 ? items[0].itemName : `${items.length} món`;
+    setToast(`Đã lưu đơn: ${label} · ${fmtVND(orderTotal)}`);
   };
   const addExpense = (entry) => {
     const next = [{ id: uid(), ...entry }, ...expenses];
     setExpenses(next);
     persist({ revenues, expenses: next, ingredients, stockMovements, menuItems });
-    setTab("dashboard");
+    setTab(role === "admin" ? "dashboard" : "today");
     setToast(`Đã lưu chi phí: ${entry.category} · ${fmtVND(entry.amount)}`);
   };
   const deleteRevenue = (id) => {
@@ -402,6 +446,8 @@ export default function App() {
   const todayMargin = todayRevGross > 0 ? (todayProfit / todayRevGross) * 100 : 0;
   const todayCash = useMemo(() => revenues.filter((r) => r.date === today && r.paymentMethod === "Tiền mặt").reduce((s, r) => s + Number(r.total), 0), [revenues, today]);
   const todayTransfer = useMemo(() => revenues.filter((r) => r.date === today && r.paymentMethod === "Chuyển khoản").reduce((s, r) => s + Number(r.total), 0), [revenues, today]);
+  const todayRevenues = useMemo(() => revenues.filter((r) => r.date === today), [revenues, today]);
+  const todayExpenses = useMemo(() => expenses.filter((e) => e.date === today), [expenses, today]);
 
   const monthRevGross = useMemo(() => revenues.filter((r) => r.date.startsWith(thisMonth)).reduce((s, r) => s + Number(r.total), 0), [revenues, thisMonth]);
   const monthFees = useMemo(() => revenues.filter((r) => r.date.startsWith(thisMonth)).reduce((s, r) => s + Number(r.feeAmount || 0), 0), [revenues, thisMonth]);
@@ -467,34 +513,94 @@ export default function App() {
             </span>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
-            <button
-              onClick={() => setTab("menu")}
-              title="Sửa menu & giá"
-              style={{
-                display: "flex", alignItems: "center", gap: 5, background: "rgba(255,255,255,0.14)",
-                border: "none", borderRadius: 10, padding: "7px 10px", cursor: "pointer", color: "#fff",
-              }}
-            >
-              <Settings size={14} />
-              <span style={{ fontSize: 11.5, fontWeight: 500 }}>Menu</span>
-            </button>
-            <button
-              onClick={() => exportExcel(revenues, expenses, ingredients, stockMovements)}
-              title="Xuất Excel"
-              style={{
-                display: "flex", alignItems: "center", gap: 5, background: "rgba(255,255,255,0.14)",
-                border: "none", borderRadius: 10, padding: "7px 10px", cursor: "pointer", color: "#fff",
-              }}
-            >
-              <Download size={14} />
-              <span style={{ fontSize: 11.5, fontWeight: 500 }}>Excel</span>
-            </button>
+            {role === "admin" ? (
+              <>
+                <button
+                  onClick={() => setTab("menu")}
+                  title="Sửa menu & giá"
+                  style={{
+                    display: "flex", alignItems: "center", gap: 5, background: "rgba(255,255,255,0.14)",
+                    border: "none", borderRadius: 10, padding: "7px 10px", cursor: "pointer", color: "#fff",
+                  }}
+                >
+                  <Settings size={14} />
+                  <span style={{ fontSize: 11.5, fontWeight: 500 }}>Menu</span>
+                </button>
+                <button
+                  onClick={() => exportExcel(revenues, expenses, ingredients, stockMovements)}
+                  title="Xuất Excel"
+                  style={{
+                    display: "flex", alignItems: "center", gap: 5, background: "rgba(255,255,255,0.14)",
+                    border: "none", borderRadius: 10, padding: "7px 10px", cursor: "pointer", color: "#fff",
+                  }}
+                >
+                  <Download size={14} />
+                  <span style={{ fontSize: 11.5, fontWeight: 500 }}>Excel</span>
+                </button>
+                <button
+                  onClick={logoutAdmin}
+                  title="Thoát chế độ chủ tiệm"
+                  style={{
+                    display: "flex", alignItems: "center", gap: 5, background: "rgba(255,255,255,0.14)",
+                    border: "none", borderRadius: 10, padding: "7px 9px", cursor: "pointer", color: "#fff",
+                  }}
+                >
+                  <Unlock size={14} />
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => { setShowLogin(true); setLoginError(""); setLoginPass(""); }}
+                title="Đăng nhập chủ tiệm"
+                style={{
+                  display: "flex", alignItems: "center", gap: 5, background: "rgba(255,255,255,0.14)",
+                  border: "none", borderRadius: 10, padding: "7px 10px", cursor: "pointer", color: "#fff",
+                }}
+              >
+                <Lock size={14} />
+                <span style={{ fontSize: 11.5, fontWeight: 500 }}>Chủ tiệm</span>
+              </button>
+            )}
           </div>
         </div>
         <div style={{ color: "#C9DCD3", fontSize: 12.5, marginTop: 2 }}>
           {new Date().toLocaleDateString("vi-VN", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" })}
         </div>
       </div>
+
+      {showLogin && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(20,30,25,0.45)", zIndex: 50,
+          display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+        }} onClick={() => setShowLogin(false)}>
+          <div
+            style={{ background: "#fff", borderRadius: 18, padding: 20, width: "100%", maxWidth: 320 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <Lock size={16} color={C.primary} />
+                <span style={{ fontWeight: 700, fontSize: 14.5, color: C.ink }}>Đăng nhập chủ tiệm</span>
+              </div>
+              <button onClick={() => setShowLogin(false)} style={{ border: "none", background: "transparent", cursor: "pointer", color: C.inkSoft }}>
+                <X size={18} />
+              </button>
+            </div>
+            <div style={{ fontSize: 11.5, color: C.inkSoft, marginBottom: 10 }}>
+              Chỉ chủ tiệm mới xem được Tổng quan, Kho và Thống kê. Đăng nhập 1 lần, thiết bị này sẽ nhớ cho đến khi bấm thoát.
+            </div>
+            <input
+              type="password" value={loginPass} autoFocus
+              onChange={(e) => { setLoginPass(e.target.value); setLoginError(""); }}
+              onKeyDown={(e) => { if (e.key === "Enter") attemptAdminLogin(); }}
+              placeholder="Nhập mật khẩu"
+              style={{ ...inputStyle, marginBottom: loginError ? 6 : 12 }}
+            />
+            {loginError && <div style={{ fontSize: 11.5, color: C.loss, marginBottom: 10 }}>{loginError}</div>}
+            <SubmitBtn disabled={!loginPass} onClick={attemptAdminLogin} color={C.primary} label="Đăng nhập" />
+          </div>
+        </div>
+      )}
 
       <div style={{ padding: "0 16px", marginTop: -18, paddingBottom: 90 }}>
         {toast && (
@@ -615,7 +721,14 @@ export default function App() {
         )}
 
         {tab === "add" && (
-          <AddForm addType={addType} setAddType={setAddType} onAddRevenue={addRevenue} onAddExpense={addExpense} menu={menuItems} />
+          <AddForm addType={addType} setAddType={setAddType} onAddOrder={addOrder} onAddExpense={addExpense} menu={menuItems} />
+        )}
+
+        {tab === "today" && (
+          <TodaySummary
+            todayRevenues={todayRevenues} todayExpenses={todayExpenses}
+            todayCash={todayCash} todayTransfer={todayTransfer} todayExpenseTotal={todayExpense}
+          />
         )}
 
         {tab === "inventory" && (
@@ -653,10 +766,19 @@ export default function App() {
         position: "sticky", bottom: 0, left: 0, right: 0, background: C.card, borderTop: `1px solid ${C.line}`,
         display: "flex", padding: "8px 6px", gap: 4, borderRadius: "18px 18px 0 0",
       }}>
-        <NavBtn icon={LayoutDashboard} label="Tổng quan" active={tab === "dashboard"} onClick={() => setTab("dashboard")} />
-        <NavBtn icon={Plus} label="Nhập liệu" active={tab === "add"} onClick={() => setTab("add")} accent />
-        <NavBtn icon={Package} label="Kho" active={tab === "inventory"} onClick={() => setTab("inventory")} badge={lowStockCount > 0 ? lowStockCount : null} />
-        <NavBtn icon={BarChart3} label="Thống kê" active={tab === "history"} onClick={() => setTab("history")} />
+        {role === "admin" ? (
+          <>
+            <NavBtn icon={LayoutDashboard} label="Tổng quan" active={tab === "dashboard"} onClick={() => setTab("dashboard")} />
+            <NavBtn icon={Plus} label="Nhập liệu" active={tab === "add"} onClick={() => setTab("add")} accent />
+            <NavBtn icon={Package} label="Kho" active={tab === "inventory"} onClick={() => setTab("inventory")} badge={lowStockCount > 0 ? lowStockCount : null} />
+            <NavBtn icon={BarChart3} label="Thống kê" active={tab === "history"} onClick={() => setTab("history")} />
+          </>
+        ) : (
+          <>
+            <NavBtn icon={Plus} label="Nhập liệu" active={tab === "add"} onClick={() => setTab("add")} accent />
+            <NavBtn icon={ClipboardList} label="Hôm nay" active={tab === "today"} onClick={() => setTab("today")} />
+          </>
+        )}
       </div>
     </div>
   );
@@ -683,21 +805,26 @@ function NavBtn({ icon: Icon, label, active, onClick, accent, badge }) {
   );
 }
 
-function AddForm({ addType, setAddType, onAddRevenue, onAddExpense, menu }) {
+function AddForm({ addType, setAddType, onAddOrder, onAddExpense, menu }) {
   const menuOptions = [...menu, MENU_KHAC];
+
+  // ---- thông tin chung của cả đơn (1 đơn = 1 khách, có thể nhiều món) ----
   const [date, setDate] = useState(todayISO());
+  const [channel, setChannel] = useState(CHANNELS[0].key);
+  const [feePercent, setFeePercent] = useState(CHANNELS[0].defaultFee);
+  const [markupAmount, setMarkupAmount] = useState(CHANNELS[0].defaultMarkupAmount);
+  const [paymentMethod, setPaymentMethod] = useState(CHANNELS[0].key === "Tại quầy" ? "Tiền mặt" : "Chuyển khoản");
+
+  // ---- món đang thêm vào đơn ----
   const [item, setItem] = useState(menuOptions[0].name);
   const [customItem, setCustomItem] = useState("");
   const [qty, setQty] = useState(1);
   const [basePrice, setBasePrice] = useState(menuOptions[0].price ?? "");
   const [price, setPrice] = useState(menuOptions[0].price ?? "");
-  const [note, setNote] = useState("");
-  const [channel, setChannel] = useState(CHANNELS[0].key);
-  const [feePercent, setFeePercent] = useState(CHANNELS[0].defaultFee);
-  const [markupAmount, setMarkupAmount] = useState(CHANNELS[0].defaultMarkupAmount);
   const [isPromo, setIsPromo] = useState(false);
   const [promoAmount, setPromoAmount] = useState(5000);
-  const [paymentMethod, setPaymentMethod] = useState(CHANNELS[0].key === "Tại quầy" ? "Tiền mặt" : "Chuyển khoản");
+
+  const [cartItems, setCartItems] = useState([]); // các món đã thêm vào đơn, chưa lưu
 
   const recomputePrice = (base, markupAmt, promoOn, promoAmt) => {
     if (base == null || base === "") return;
@@ -710,31 +837,56 @@ function AddForm({ addType, setAddType, onAddRevenue, onAddExpense, menu }) {
   const [amount, setAmount] = useState("");
   const [desc, setDesc] = useState("");
 
-  const total = (Number(qty) || 0) * (Number(price) || 0);
-  const feeAmount = (total * (Number(feePercent) || 0)) / 100;
-  const netAmount = total - feeAmount;
-  const canSubmitRevenue = Number(qty) > 0 && Number(price) > 0 && (item !== "Khác" || customItem.trim());
+  const itemTotal = (Number(qty) || 0) * (Number(price) || 0);
+  const canAddItem = Number(qty) > 0 && Number(price) > 0 && (item !== "Khác" || customItem.trim());
   const canSubmitExpense = Number(amount) > 0;
 
-  const resetRevenue = () => {
-    setQty(1); setNote(""); setCustomItem("");
-    setIsPromo(false);
-    recomputePrice(basePrice, markupAmount, false, promoAmount);
+  const cartGross = cartItems.reduce((s, c) => s + c.total, 0);
+  const cartFee = (cartGross * (Number(feePercent) || 0)) / 100;
+  const cartNet = cartGross - cartFee;
+
+  const addToCart = () => {
+    if (!canAddItem) return;
+    const nm = item === "Khác" ? customItem.trim() : item;
+    setCartItems((prev) => [...prev, {
+      id: uid(), itemName: nm, quantity: Number(qty),
+      basePrice: basePrice === "" ? null : Number(basePrice),
+      markupAmount: Number(markupAmount) || 0,
+      isPromo, promoAmount: isPromo ? Number(promoAmount) || 0 : 0,
+      price: Number(price), total: itemTotal,
+    }]);
+    const preset = menuOptions[0];
+    setItem(preset.name); setCustomItem(""); setQty(1); setIsPromo(false);
+    const nb = preset.price ?? "";
+    setBasePrice(nb);
+    recomputePrice(nb, markupAmount, false, promoAmount);
+  };
+  const removeFromCart = (id) => setCartItems((prev) => prev.filter((c) => c.id !== id));
+
+  const resetOrder = () => {
+    setCartItems([]);
+    const preset = menuOptions[0];
+    setItem(preset.name); setCustomItem(""); setQty(1); setIsPromo(false);
+    const nb = preset.price ?? "";
+    setBasePrice(nb);
+    recomputePrice(nb, markupAmount, false, promoAmount);
   };
   const resetExpense = () => { setAmount(""); setDesc(""); };
 
-  const submitRevenue = () => {
-    if (!canSubmitRevenue) return;
-    onAddRevenue({
-      date, itemName: item === "Khác" ? customItem.trim() : item,
-      quantity: Number(qty), unitPrice: Number(price), total,
-      basePrice: basePrice === "" ? null : Number(basePrice),
-      channel, feePercent: Number(feePercent) || 0, feeAmount, netAmount,
-      markupAmount: Number(markupAmount) || 0,
-      isPromo, promoAmount: isPromo ? Number(promoAmount) || 0 : 0,
-      paymentMethod, note: note.trim(),
+  const submitOrder = () => {
+    if (!cartItems.length) return;
+    const rows = cartItems.map((c) => {
+      const feeAmt = (c.total * (Number(feePercent) || 0)) / 100;
+      return {
+        date, itemName: c.itemName, quantity: c.quantity, unitPrice: c.price, total: c.total,
+        basePrice: c.basePrice, channel, feePercent: Number(feePercent) || 0,
+        feeAmount: feeAmt, netAmount: c.total - feeAmt,
+        markupAmount: c.markupAmount, isPromo: c.isPromo, promoAmount: c.promoAmount,
+        paymentMethod, note: "",
+      };
     });
-    resetRevenue();
+    onAddOrder(rows);
+    resetOrder();
   };
   const submitExpense = () => {
     if (!canSubmitExpense) return;
@@ -749,7 +901,7 @@ function AddForm({ addType, setAddType, onAddRevenue, onAddExpense, menu }) {
           flex: 1, padding: "9px 0", borderRadius: 10, border: "none", cursor: "pointer",
           background: addType === "thu" ? C.primary : "transparent",
           color: addType === "thu" ? "#fff" : C.inkSoft, fontWeight: 600, fontSize: 13.5,
-        }}>+ Doanh thu</button>
+        }}>+ Đơn hàng</button>
         <button onClick={() => setAddType("chi")} style={{
           flex: 1, padding: "9px 0", borderRadius: 10, border: "none", cursor: "pointer",
           background: addType === "chi" ? C.berry : "transparent",
@@ -757,13 +909,56 @@ function AddForm({ addType, setAddType, onAddRevenue, onAddExpense, menu }) {
         }}>+ Chi phí</button>
       </div>
 
-      <div style={{ background: C.card, borderRadius: 16, padding: 16, border: `1px solid ${C.line}` }}>
-        <Field label="Ngày">
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={inputStyle} />
-        </Field>
+      {addType === "thu" ? (
+        <>
+          <div style={{ background: C.card, borderRadius: 16, padding: 16, border: `1px solid ${C.line}`, marginBottom: 12 }}>
+            <div style={{ fontSize: 11.5, color: C.inkSoft, marginBottom: 8, display: "flex", alignItems: "center", gap: 5 }}>
+              <ShoppingCart size={13} /> Thông tin đơn hàng
+            </div>
+            <Field label="Ngày">
+              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={inputStyle} />
+            </Field>
+            <Field label="Kênh bán">
+              <select value={channel} onChange={(e) => {
+                const ch = e.target.value;
+                setChannel(ch);
+                const preset = CHANNELS.find((c) => c.key === ch);
+                setFeePercent(preset ? preset.defaultFee : 0);
+                setMarkupAmount(preset ? preset.defaultMarkupAmount : 0);
+                recomputePrice(basePrice, preset ? preset.defaultMarkupAmount : 0, isPromo, promoAmount);
+                setPaymentMethod(ch === "Tại quầy" ? "Tiền mặt" : "Chuyển khoản");
+              }} style={inputStyle}>
+                {CHANNELS.map((c) => <option key={c.key} value={c.key}>{c.key}</option>)}
+              </select>
+            </Field>
+            <Field label="Phương thức thu tiền">
+              <div style={{ display: "flex", gap: 8 }}>
+                {PAYMENT_METHODS.map((pm) => (
+                  <button key={pm} type="button" onClick={() => setPaymentMethod(pm)} style={{
+                    flex: 1, padding: "8px 0", borderRadius: 10, border: `1px solid ${paymentMethod === pm ? C.primary : C.line}`,
+                    background: paymentMethod === pm ? C.primary : "#fff", color: paymentMethod === pm ? "#fff" : C.inkSoft,
+                    fontWeight: 600, fontSize: 12.5, cursor: "pointer",
+                  }}>{pm}</button>
+                ))}
+              </div>
+            </Field>
+            {channel !== "Tại quầy" && (
+              <div style={{ display: "flex", gap: 10 }}>
+                <Field label="Phí kênh (%)" style={{ flex: 1 }}>
+                  <input type="number" min="0" max="100" value={feePercent} onChange={(e) => setFeePercent(e.target.value)} style={inputStyle} />
+                </Field>
+                <Field label="Giá cao hơn giá quầy (đ)" style={{ flex: 1.2 }}>
+                  <input type="number" min="0" value={markupAmount} onChange={(e) => {
+                    setMarkupAmount(e.target.value);
+                    recomputePrice(basePrice, e.target.value, isPromo, promoAmount);
+                  }} placeholder="VD: 3000" style={{ ...inputStyle, marginBottom: 0 }} />
+                </Field>
+              </div>
+            )}
+          </div>
 
-        {addType === "thu" ? (
-          <>
+          <div style={{ background: C.card, borderRadius: 16, padding: 16, border: `1px solid ${C.line}`, marginBottom: 12 }}>
+            <div style={{ fontSize: 11.5, color: C.inkSoft, marginBottom: 8, fontWeight: 600 }}>Thêm món vào đơn</div>
             <Field label="Món">
               <select value={item} onChange={(e) => {
                 const name = e.target.value;
@@ -786,52 +981,12 @@ function AddForm({ addType, setAddType, onAddRevenue, onAddExpense, menu }) {
               </Field>
             )}
 
-            <Field label="Kênh bán">
-              <select value={channel} onChange={(e) => {
-                const ch = e.target.value;
-                setChannel(ch);
-                const preset = CHANNELS.find((c) => c.key === ch);
-                setFeePercent(preset ? preset.defaultFee : 0);
-                setMarkupAmount(preset ? preset.defaultMarkupAmount : 0);
-                recomputePrice(basePrice, preset ? preset.defaultMarkupAmount : 0, isPromo, promoAmount);
-                setPaymentMethod(ch === "Tại quầy" ? "Tiền mặt" : "Chuyển khoản");
-              }} style={inputStyle}>
-                {CHANNELS.map((c) => <option key={c.key} value={c.key}>{c.key}</option>)}
-              </select>
-            </Field>
-
-            <Field label="Phương thức thu tiền">
-              <div style={{ display: "flex", gap: 8 }}>
-                {PAYMENT_METHODS.map((pm) => (
-                  <button key={pm} type="button" onClick={() => setPaymentMethod(pm)} style={{
-                    flex: 1, padding: "8px 0", borderRadius: 10, border: `1px solid ${paymentMethod === pm ? C.primary : C.line}`,
-                    background: paymentMethod === pm ? C.primary : "#fff", color: paymentMethod === pm ? "#fff" : C.inkSoft,
-                    fontWeight: 600, fontSize: 12.5, cursor: "pointer",
-                  }}>{pm}</button>
-                ))}
-              </div>
-            </Field>
-
-            {channel !== "Tại quầy" && (
-              <div style={{ display: "flex", gap: 10 }}>
-                <Field label="Phí kênh (%)" style={{ flex: 1 }}>
-                  <input type="number" min="0" max="100" value={feePercent} onChange={(e) => setFeePercent(e.target.value)} style={inputStyle} />
-                </Field>
-                <Field label="Giá cao hơn giá quầy (đ)" style={{ flex: 1.2 }}>
-                  <input type="number" min="0" value={markupAmount} onChange={(e) => {
-                    setMarkupAmount(e.target.value);
-                    recomputePrice(basePrice, e.target.value, isPromo, promoAmount);
-                  }} placeholder="VD: 3000" style={inputStyle} />
-                </Field>
-              </div>
-            )}
-
             <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, color: C.ink, marginBottom: isPromo ? 8 : 12, fontWeight: 500 }}>
               <input type="checkbox" checked={isPromo} onChange={(e) => {
                 setIsPromo(e.target.checked);
                 recomputePrice(basePrice, markupAmount, e.target.checked, promoAmount);
               }} />
-              Đang khuyến mãi trên kênh này
+              Món này đang khuyến mãi
             </label>
             {isPromo && (
               <Field label="Giảm giá khuyến mãi (đ)">
@@ -856,46 +1011,81 @@ function AddForm({ addType, setAddType, onAddRevenue, onAddExpense, menu }) {
               </div>
             )}
 
-            <Field label="Ghi chú (tuỳ chọn)">
-              <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="VD: khách quen, giảm giá..." style={inputStyle} />
-            </Field>
-
-            <div style={{ background: C.cream, borderRadius: 10, padding: "8px 12px", marginBottom: 12, fontSize: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ color: C.inkSoft }}>Thành tiền</span>
-                <span className="ff-mono" style={{ color: C.ink, fontWeight: 600 }}>{fmtVND(total)}</span>
-              </div>
-              {feeAmount > 0 && (
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ color: C.inkSoft }}>Phí kênh ({feePercent}%)</span>
-                  <span className="ff-mono" style={{ color: C.berry, fontWeight: 600 }}>−{fmtVND(feeAmount)}</span>
-                </div>
-              )}
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
-                <span style={{ color: C.inkSoft, fontWeight: 600 }}>Thực nhận</span>
-                <span className="ff-mono" style={{ color: C.primary, fontWeight: 700 }}>{fmtVND(netAmount)}</span>
-              </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <span style={{ fontSize: 12, color: C.inkSoft }}>Thành tiền món này: <b style={{ color: C.ink }}>{fmtVND(itemTotal)}</b></span>
             </div>
-            <SubmitBtn disabled={!canSubmitRevenue} onClick={submitRevenue} color={C.primary} label="Lưu doanh thu" />
-          </>
-        ) : (
-          <>
-            <Field label="Danh mục">
-              <select value={category} onChange={(e) => setCategory(e.target.value)} style={inputStyle}>
-                {EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </Field>
-            <Field label="Số tiền (đ)">
-              <input type="number" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="VD: 150000" style={inputStyle} />
-            </Field>
-            <Field label="Mô tả (tuỳ chọn)">
-              <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="VD: mua đường, xăng xe giao hàng..." style={inputStyle} />
-            </Field>
-            <div style={{ marginBottom: 12 }} />
-            <SubmitBtn disabled={!canSubmitExpense} onClick={submitExpense} color={C.berry} label="Lưu chi phí" />
-          </>
-        )}
-      </div>
+            <SubmitBtn disabled={!canAddItem} onClick={addToCart} color={C.primaryLight} label="+ Thêm vào đơn" />
+          </div>
+
+          <div style={{ background: C.card, borderRadius: 16, padding: 16, border: `1px solid ${C.line}` }}>
+            <div style={{ fontSize: 11.5, color: C.inkSoft, marginBottom: 8, fontWeight: 600 }}>
+              Món trong đơn {cartItems.length > 0 ? `(${cartItems.length})` : ""}
+            </div>
+            {cartItems.length === 0 ? (
+              <div style={{ fontSize: 12, color: C.inkSoft, padding: "6px 0 14px" }}>Chưa có món nào — thêm món ở trên.</div>
+            ) : (
+              <div style={{ marginBottom: 12 }}>
+                {cartItems.map((c) => (
+                  <div key={c.id} style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    padding: "7px 0", borderBottom: `1px solid ${C.line}`, fontSize: 12.5,
+                  }}>
+                    <div>
+                      <span style={{ color: C.ink, fontWeight: 600 }}>{c.itemName}</span>
+                      <span style={{ color: C.inkSoft }}> × {c.quantity}{c.isPromo ? " · KM" : ""}</span>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span className="ff-mono" style={{ color: C.ink, fontWeight: 600 }}>{fmtVND(c.total)}</span>
+                      <button onClick={() => removeFromCart(c.id)} style={{ border: "none", background: "transparent", cursor: "pointer", color: C.inkSoft, padding: 2 }}>
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {cartItems.length > 0 && (
+              <div style={{ background: C.cream, borderRadius: 10, padding: "8px 12px", marginBottom: 12, fontSize: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: C.inkSoft }}>Tổng tiền đơn</span>
+                  <span className="ff-mono" style={{ color: C.ink, fontWeight: 600 }}>{fmtVND(cartGross)}</span>
+                </div>
+                {cartFee > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: C.inkSoft }}>Phí kênh ({feePercent}%)</span>
+                    <span className="ff-mono" style={{ color: C.berry, fontWeight: 600 }}>−{fmtVND(cartFee)}</span>
+                  </div>
+                )}
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
+                  <span style={{ color: C.inkSoft, fontWeight: 600 }}>Thực nhận</span>
+                  <span className="ff-mono" style={{ color: C.primary, fontWeight: 700 }}>{fmtVND(cartNet)}</span>
+                </div>
+              </div>
+            )}
+            <SubmitBtn disabled={cartItems.length === 0} onClick={submitOrder} color={C.primary} label="Lưu đơn hàng" />
+          </div>
+        </>
+      ) : (
+        <div style={{ background: C.card, borderRadius: 16, padding: 16, border: `1px solid ${C.line}` }}>
+          <Field label="Ngày">
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={inputStyle} />
+          </Field>
+          <Field label="Danh mục">
+            <select value={category} onChange={(e) => setCategory(e.target.value)} style={inputStyle}>
+              {EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </Field>
+          <Field label="Số tiền (đ)">
+            <input type="number" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="VD: 150000" style={inputStyle} />
+          </Field>
+          <Field label="Mô tả (tuỳ chọn)">
+            <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="VD: mua đường, xăng xe giao hàng..." style={inputStyle} />
+          </Field>
+          <div style={{ marginBottom: 12 }} />
+          <SubmitBtn disabled={!canSubmitExpense} onClick={submitExpense} color={C.berry} label="Lưu chi phí" />
+        </div>
+      )}
     </div>
   );
 }
@@ -1488,6 +1678,93 @@ function HistoryList({ entries, filter, setFilter, type, setType, onDeleteRevenu
               <button onClick={() => (e.kind === "thu" ? onDeleteRevenue(e.id) : onDeleteExpense(e.id))} style={{ border: "none", background: "transparent", cursor: "pointer", padding: 4, flexShrink: 0 }}>
                 <Trash2 size={15} color={C.inkSoft} />
               </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TodaySummary({ todayRevenues, todayExpenses, todayCash, todayTransfer, todayExpenseTotal }) {
+  const totalRev = todayCash + todayTransfer;
+  const net = totalRev - todayExpenseTotal;
+
+  const orders = useMemo(() => {
+    const map = new Map();
+    todayRevenues.forEach((r) => {
+      const key = r.orderId || r.id;
+      if (!map.has(key)) map.set(key, { key, channel: r.channel, paymentMethod: r.paymentMethod, items: [], total: 0 });
+      const o = map.get(key);
+      o.items.push(r);
+      o.total += Number(r.total);
+    });
+    return Array.from(map.values());
+  }, [todayRevenues]);
+
+  return (
+    <div style={{ animation: "riseIn 0.35s ease" }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink, marginBottom: 10 }}>Hôm nay — để kết sổ cuối ngày</div>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+        <div style={{ flex: 1, background: C.card, borderRadius: 12, padding: "10px 12px", border: `1px solid ${C.line}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
+            <Banknote size={14} color={C.primary} />
+            <span style={{ fontSize: 11, color: C.inkSoft, fontWeight: 500 }}>Tiền mặt</span>
+          </div>
+          <div className="ff-mono" style={{ fontSize: 15, fontWeight: 700, color: C.primary }}>{fmtVND(todayCash)}</div>
+        </div>
+        <div style={{ flex: 1, background: C.card, borderRadius: 12, padding: "10px 12px", border: `1px solid ${C.line}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
+            <Landmark size={14} color={C.mango} />
+            <span style={{ fontSize: 11, color: C.inkSoft, fontWeight: 500 }}>Chuyển khoản</span>
+          </div>
+          <div className="ff-mono" style={{ fontSize: 15, fontWeight: 700, color: C.mango }}>{fmtVND(todayTransfer)}</div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", background: C.cream, borderRadius: 12, padding: "10px 14px", marginBottom: 16, fontSize: 12.5, border: `1px solid ${C.line}` }}>
+        <span style={{ color: C.primary, fontWeight: 600 }}>Thu: {fmtVND(totalRev)}</span>
+        <span style={{ color: C.berry, fontWeight: 600 }}>Chi: {fmtVND(todayExpenseTotal)}</span>
+        <span style={{ color: C.ink, fontWeight: 700 }}>Ròng: {fmtVND(net)}</span>
+      </div>
+
+      <div style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600, marginBottom: 8 }}>
+        Đơn hàng hôm nay {orders.length > 0 ? `(${orders.length})` : ""}
+      </div>
+      {orders.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: C.inkSoft, padding: "6px 0 16px" }}>Chưa có đơn nào hôm nay.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+          {orders.map((o) => (
+            <div key={o.key} style={{ background: C.card, borderRadius: 12, padding: "10px 12px", border: `1px solid ${C.line}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                <div style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.5 }}>
+                  {o.items.map((it) => `${it.itemName} ×${it.quantity}`).join(", ")}
+                </div>
+                <div className="ff-mono" style={{ fontSize: 13.5, fontWeight: 700, color: C.primary, whiteSpace: "nowrap" }}>{fmtVND(o.total)}</div>
+              </div>
+              <div style={{ fontSize: 10.5, color: C.inkSoft, marginTop: 4 }}>
+                {o.channel} · {o.paymentMethod === "Tiền mặt" ? "Tiền mặt" : "Chuyển khoản"}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ fontSize: 12, color: C.inkSoft, fontWeight: 600, marginBottom: 8 }}>
+        Chi phí hôm nay {todayExpenses.length > 0 ? `(${todayExpenses.length})` : ""}
+      </div>
+      {todayExpenses.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: C.inkSoft, padding: "6px 0" }}>Chưa có khoản chi nào hôm nay.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {todayExpenses.map((e) => (
+            <div key={e.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: C.card, borderRadius: 12, padding: "10px 12px", border: `1px solid ${C.line}` }}>
+              <div style={{ fontSize: 12.5, color: C.ink }}>
+                {e.category}{e.description ? ` · ${e.description}` : ""}
+              </div>
+              <div className="ff-mono" style={{ fontSize: 13, fontWeight: 700, color: C.berry }}>−{fmtVND(e.amount)}</div>
             </div>
           ))}
         </div>
