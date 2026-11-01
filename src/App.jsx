@@ -284,6 +284,7 @@ export default function App() {
   const [historyFilter, setHistoryFilter] = useState("today");
   const [historyType, setHistoryType] = useState("all");
   const [historyItem, setHistoryItem] = useState("all");
+  const [historyCustomDate, setHistoryCustomDate] = useState(() => todayISO());
   const [saveError, setSaveError] = useState(false);
   const [toast, setToast] = useState(null);
   const [showLogin, setShowLogin] = useState(false);
@@ -531,8 +532,9 @@ export default function App() {
       const cutoff = weekAgo.toLocaleDateString("en-CA");
       items = items.filter((i) => i.date >= cutoff);
     } else if (historyFilter === "month") items = items.filter((i) => i.date.startsWith(thisMonth));
+    else if (historyFilter === "custom") items = items.filter((i) => i.date === historyCustomDate);
     return items.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-  }, [revenues, expenses, historyFilter, historyType, historyItem, today, thisMonth]);
+  }, [revenues, expenses, historyFilter, historyType, historyItem, historyCustomDate, today, thisMonth]);
 
   const lowStockCount = useMemo(() => ingredients.filter((ing) => stockOf(ing, stockMovements) <= Number(ing.lowStockThreshold || 0)).length, [ingredients, stockMovements]);
   const lossAlertCount = useMemo(() => ingredients.filter((ing) => lossOf(ing, stockMovements, thisMonth) > 0).length, [ingredients, stockMovements, thisMonth]);
@@ -808,6 +810,7 @@ export default function App() {
         {tab === "history" && (
           <HistoryList
             entries={historyEntries} filter={historyFilter} setFilter={setHistoryFilter}
+            customDate={historyCustomDate} setCustomDate={setHistoryCustomDate}
             type={historyType} setType={setHistoryType}
             item={historyItem} setItem={setHistoryItem} itemOptions={historyItemOptions}
             onDeleteRevenue={deleteRevenue} onDeleteExpense={deleteExpense}
@@ -1758,7 +1761,7 @@ function SubmitBtn({ disabled, onClick, color, label }) {
   );
 }
 
-function HistoryList({ entries, filter, setFilter, type, setType, item, setItem, itemOptions, onDeleteRevenue, onDeleteExpense }) {
+function HistoryList({ entries, filter, setFilter, customDate, setCustomDate, type, setType, item, setItem, itemOptions, onDeleteRevenue, onDeleteExpense }) {
   const totalIn = entries.filter((e) => e.kind === "thu").reduce((s, e) => s + Number(e.total), 0);
   const totalOut = entries.filter((e) => e.kind === "chi").reduce((s, e) => s + Number(e.total), 0);
 
@@ -1769,7 +1772,7 @@ function HistoryList({ entries, filter, setFilter, type, setType, item, setItem,
   const transferCount = revenueEntries.filter((e) => e.paymentMethod === "Chuyển khoản").length;
   const totalQty = revenueEntries.reduce((s, e) => s + Number(e.quantity || 0), 0);
 
-  const filters = [["today", "Hôm nay"], ["week", "7 ngày"], ["month", "Tháng này"], ["all", "Tất cả"]];
+  const filters = [["today", "Hôm nay"], ["week", "7 ngày"], ["month", "Tháng này"], ["custom", "Theo ngày"], ["all", "Tất cả"]];
   const types = [["all", "Tất cả"], ["thu", "Thu"], ["chi", "Chi"]];
 
   return (
@@ -1777,6 +1780,18 @@ function HistoryList({ entries, filter, setFilter, type, setType, item, setItem,
       <div style={{ display: "flex", gap: 6, marginBottom: 8, overflowX: "auto" }}>
         {filters.map(([k, l]) => <Chip key={k} active={filter === k} onClick={() => setFilter(k)} label={l} />)}
       </div>
+
+      {filter === "custom" && (
+        <div style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
+          <input
+            type="date"
+            value={customDate}
+            onChange={(e) => setCustomDate(e.target.value)}
+            style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
+          />
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
         {types.map(([k, l]) => <Chip key={k} active={type === k} onClick={() => setType(k)} label={l} small />)}
       </div>
