@@ -271,6 +271,7 @@ export default function App() {
   const [addType, setAddType] = useState("thu");
   const [historyFilter, setHistoryFilter] = useState("today");
   const [historyType, setHistoryType] = useState("all");
+  const [historyItem, setHistoryItem] = useState("all");
   const [saveError, setSaveError] = useState(false);
   const [toast, setToast] = useState(null);
   const [showLogin, setShowLogin] = useState(false);
@@ -500,12 +501,18 @@ export default function App() {
     return days;
   }, [revenues, expenses]);
 
+  const historyItemOptions = useMemo(() => {
+    const names = Array.from(new Set(revenues.map((r) => r.itemName).filter(Boolean)));
+    return names.sort((a, b) => a.localeCompare(b, "vi"));
+  }, [revenues]);
+
   const historyEntries = useMemo(() => {
     let items = [
       ...revenues.map((r) => ({ ...r, kind: "thu" })),
       ...expenses.map((e) => ({ ...e, kind: "chi", total: e.amount })),
     ];
     if (historyType !== "all") items = items.filter((i) => i.kind === historyType);
+    if (historyItem !== "all") items = items.filter((i) => i.kind === "thu" && i.itemName === historyItem);
     if (historyFilter === "today") items = items.filter((i) => i.date === today);
     else if (historyFilter === "week") {
       const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 6);
@@ -513,7 +520,7 @@ export default function App() {
       items = items.filter((i) => i.date >= cutoff);
     } else if (historyFilter === "month") items = items.filter((i) => i.date.startsWith(thisMonth));
     return items.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-  }, [revenues, expenses, historyFilter, historyType, today, thisMonth]);
+  }, [revenues, expenses, historyFilter, historyType, historyItem, today, thisMonth]);
 
   const lowStockCount = useMemo(() => ingredients.filter((ing) => stockOf(ing, stockMovements) <= Number(ing.lowStockThreshold || 0)).length, [ingredients, stockMovements]);
   const lossAlertCount = useMemo(() => ingredients.filter((ing) => lossOf(ing, stockMovements, thisMonth) > 0).length, [ingredients, stockMovements, thisMonth]);
@@ -790,6 +797,7 @@ export default function App() {
           <HistoryList
             entries={historyEntries} filter={historyFilter} setFilter={setHistoryFilter}
             type={historyType} setType={setHistoryType}
+            item={historyItem} setItem={setHistoryItem} itemOptions={historyItemOptions}
             onDeleteRevenue={deleteRevenue} onDeleteExpense={deleteExpense}
           />
         )}
@@ -1738,7 +1746,7 @@ function SubmitBtn({ disabled, onClick, color, label }) {
   );
 }
 
-function HistoryList({ entries, filter, setFilter, type, setType, onDeleteRevenue, onDeleteExpense }) {
+function HistoryList({ entries, filter, setFilter, type, setType, item, setItem, itemOptions, onDeleteRevenue, onDeleteExpense }) {
   const totalIn = entries.filter((e) => e.kind === "thu").reduce((s, e) => s + Number(e.total), 0);
   const totalOut = entries.filter((e) => e.kind === "chi").reduce((s, e) => s + Number(e.total), 0);
 
@@ -1747,6 +1755,7 @@ function HistoryList({ entries, filter, setFilter, type, setType, onDeleteRevenu
   const transferTotal = revenueEntries.filter((e) => e.paymentMethod === "Chuyển khoản").reduce((s, e) => s + Number(e.total), 0);
   const cashCount = revenueEntries.filter((e) => e.paymentMethod === "Tiền mặt").length;
   const transferCount = revenueEntries.filter((e) => e.paymentMethod === "Chuyển khoản").length;
+  const totalQty = revenueEntries.reduce((s, e) => s + Number(e.quantity || 0), 0);
 
   const filters = [["today", "Hôm nay"], ["week", "7 ngày"], ["month", "Tháng này"], ["all", "Tất cả"]];
   const types = [["all", "Tất cả"], ["thu", "Thu"], ["chi", "Chi"]];
@@ -1756,9 +1765,28 @@ function HistoryList({ entries, filter, setFilter, type, setType, onDeleteRevenu
       <div style={{ display: "flex", gap: 6, marginBottom: 8, overflowX: "auto" }}>
         {filters.map(([k, l]) => <Chip key={k} active={filter === k} onClick={() => setFilter(k)} label={l} />)}
       </div>
-      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+      <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
         {types.map(([k, l]) => <Chip key={k} active={type === k} onClick={() => setType(k)} label={l} small />)}
       </div>
+
+      {type !== "chi" && (
+        <div style={{ marginBottom: 12 }}>
+          <select value={item} onChange={(e) => setItem(e.target.value)} style={{ ...inputStyle, marginBottom: 0 }}>
+            <option value="all">Lọc theo món — Tất cả món</option>
+            {itemOptions.map((nm) => <option key={nm} value={nm}>{nm}</option>)}
+          </select>
+        </div>
+      )}
+
+      {item !== "all" && (
+        <div style={{ fontSize: 11.5, color: C.inkSoft, marginBottom: 10 }}>
+          Đang lọc món: <b style={{ color: C.ink }}>{item}</b> · tổng số lượng bán: <b style={{ color: C.ink }}>{fmtNum(totalQty)} ly</b>
+          {" "}
+          <button onClick={() => setItem("all")} style={{ border: "none", background: "transparent", color: C.primary, fontSize: 11.5, fontWeight: 600, cursor: "pointer", padding: 0 }}>
+            (bỏ lọc)
+          </button>
+        </div>
+      )}
 
       <div style={{ display: "flex", justifyContent: "space-between", background: C.cream, borderRadius: 12, padding: "10px 14px", marginBottom: 12, fontSize: 12.5, border: `1px solid ${C.line}` }}>
         <span style={{ color: C.primary, fontWeight: 600 }}>Thu: {fmtVND(totalIn)}</span>
