@@ -66,6 +66,18 @@ const ADMIN_FLAG_KEY = "tra-na-admin-unlocked";
 
 const todayISO = () => new Date().toLocaleDateString("en-CA");
 const monthPrefix = () => todayISO().slice(0, 7);
+function dayGroupLabel(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  const todayStr = todayISO();
+  const y = new Date(); y.setDate(y.getDate() - 1);
+  const yesterdayStr = y.toLocaleDateString("en-CA");
+  let prefix = "";
+  if (dateStr === todayStr) prefix = "Hôm nay · ";
+  else if (dateStr === yesterdayStr) prefix = "Hôm qua · ";
+  const weekday = d.toLocaleDateString("vi-VN", { weekday: "long" });
+  const dm = d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" });
+  return `${prefix}${weekday}, ${dm}`;
+}
 const fmtVND = (n) => (Number(n) || 0).toLocaleString("vi-VN") + " đ";
 const fmtNum = (n) => (Number(n) || 0).toLocaleString("vi-VN", { maximumFractionDigits: 2 });
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -317,7 +329,7 @@ export default function App() {
         if (error) throw error;
         if (data && data.payload) parsed = data.payload;
       } catch (e) {
-        console.error(e);
+        // chưa có dữ liệu — bắt đầu mới
       }
       if (parsed) {
         setRevenues(parsed.revenues || []);
@@ -1816,30 +1828,58 @@ function HistoryList({ entries, filter, setFilter, type, setType, item, setItem,
       {entries.length === 0 ? (
         <div style={{ textAlign: "center", color: C.inkSoft, fontSize: 13, padding: "30px 0" }}>Chưa có giao dịch nào trong khoảng này.</div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {entries.map((e) => (
-            <div key={e.id} style={{ background: C.card, borderRadius: 12, padding: "10px 12px", border: `1px solid ${C.line}`, display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 8, height: 8, borderRadius: 4, flexShrink: 0, background: e.kind === "thu" ? C.primary : C.berry }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {e.kind === "thu" ? e.itemName : e.category}
-                </div>
-                <div style={{ fontSize: 11, color: C.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {e.date}{e.kind === "thu" ? ` · ${e.channel} · ${e.paymentMethod === "Tiền mặt" ? "TM" : "CK"}${e.isPromo ? ` · KM -${fmtVND(e.promoAmount)}` : ""} · SL ${e.quantity} × ${fmtVND(e.unitPrice)}` : (e.description ? ` · ${e.description}` : "")}
-                </div>
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <div className="ff-mono" style={{ fontSize: 13.5, fontWeight: 700, color: e.kind === "thu" ? C.primary : C.berry, whiteSpace: "nowrap" }}>
-                  {e.kind === "thu" ? "+" : "−"}{fmtVND(e.total)}
-                </div>
-                {e.kind === "thu" && e.feeAmount > 0 && <div style={{ fontSize: 9.5, color: C.inkSoft }}>thực nhận {fmtVND(e.netAmount)}</div>}
-              </div>
-              <button onClick={() => (e.kind === "thu" ? onDeleteRevenue(e.id) : onDeleteExpense(e.id))} style={{ border: "none", background: "transparent", cursor: "pointer", padding: 4, flexShrink: 0 }}>
-                <Trash2 size={15} color={C.inkSoft} />
-              </button>
+        (() => {
+          const groups = [];
+          entries.forEach((e) => {
+            const last = groups[groups.length - 1];
+            if (last && last.date === e.date) last.items.push(e);
+            else groups.push({ date: e.date, items: [e] });
+          });
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              {groups.map((g) => {
+                const dayIn = g.items.filter((e) => e.kind === "thu").reduce((s, e) => s + Number(e.total), 0);
+                const dayOut = g.items.filter((e) => e.kind === "chi").reduce((s, e) => s + Number(e.total), 0);
+                return (
+                  <div key={g.date}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8, padding: "0 2px" }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: C.ink }}>{dayGroupLabel(g.date)}</span>
+                      <span style={{ fontSize: 10.5, color: C.inkSoft }}>
+                        {dayIn > 0 && <span style={{ color: C.primary, fontWeight: 600 }}>+{fmtVND(dayIn)}</span>}
+                        {dayIn > 0 && dayOut > 0 && "  ·  "}
+                        {dayOut > 0 && <span style={{ color: C.berry, fontWeight: 600 }}>−{fmtVND(dayOut)}</span>}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {g.items.map((e) => (
+                        <div key={e.id} style={{ background: C.card, borderRadius: 12, padding: "10px 12px", border: `1px solid ${C.line}`, display: "flex", alignItems: "center", gap: 10 }}>
+                          <div style={{ width: 8, height: 8, borderRadius: 4, flexShrink: 0, background: e.kind === "thu" ? C.primary : C.berry }} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13.5, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {e.kind === "thu" ? e.itemName : e.category}
+                            </div>
+                            <div style={{ fontSize: 11, color: C.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {e.kind === "thu" ? `${e.channel} · ${e.paymentMethod === "Tiền mặt" ? "TM" : "CK"}${e.isPromo ? ` · KM -${fmtVND(e.promoAmount)}` : ""} · SL ${e.quantity} × ${fmtVND(e.unitPrice)}` : (e.description || "")}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: "right" }}>
+                            <div className="ff-mono" style={{ fontSize: 13.5, fontWeight: 700, color: e.kind === "thu" ? C.primary : C.berry, whiteSpace: "nowrap" }}>
+                              {e.kind === "thu" ? "+" : "−"}{fmtVND(e.total)}
+                            </div>
+                            {e.kind === "thu" && e.feeAmount > 0 && <div style={{ fontSize: 9.5, color: C.inkSoft }}>thực nhận {fmtVND(e.netAmount)}</div>}
+                          </div>
+                          <button onClick={() => (e.kind === "thu" ? onDeleteRevenue(e.id) : onDeleteExpense(e.id))} style={{ border: "none", background: "transparent", cursor: "pointer", padding: 4, flexShrink: 0 }}>
+                            <Trash2 size={15} color={C.inkSoft} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          ))}
-        </div>
+          );
+        })()
       )}
     </div>
   );
